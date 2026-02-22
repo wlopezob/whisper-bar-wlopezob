@@ -1,6 +1,6 @@
 # whisperwlopezob
 
-App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con `whisper-cli` y pega el texto donde está el cursor. Opcionalmente corrige gramática y pronunciación con un LLM local (`llama-cli`).
+App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con `whisper-cli` y pega el texto donde está el cursor. Opcionalmente corrige gramática y pronunciación con un LLM local (preferentemente `llama-completion`, fallback `llama-cli`).
 
 **Hotkey:** `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar.
 
@@ -107,6 +107,25 @@ curl -L -o ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
 
 > Puedes colocar múltiples modelos `.gguf` en `~/.config/whisperwlopezob/llm/`. Todos aparecerán en el menú para seleccionar.
 
+#### Probar `llama-completion` directamente en consola
+
+Este comando replica el flujo que usa la app (prompt de sistema + entrada de usuario):
+
+```bash
+llama-completion \
+  -m ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
+  -sys "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words." \
+  -p "Could you help me send a message for Mama?" \
+  -n 128 -ngl 99 \
+  > /tmp/llm_out.txt 2> /tmp/llm_err.txt
+
+# Texto generado (incluye bloque assistant)
+cat /tmp/llm_out.txt
+
+# Logs técnicos del motor (carga de modelo, performance, etc.)
+head -n 40 /tmp/llm_err.txt
+```
+
 ### 7. Compilar e instalar como .app
 
 ```bash
@@ -186,7 +205,7 @@ Idioma
   ✓ Español
     English
 ─────────────────────────────────────────
-✅ llama-cli: /opt/homebrew/bin/llama-cli
+✅ llama-cli: /opt/homebrew/bin/llama-completion
 Modelo LLM:
   ✓ qwen2.5-1.5b-instruct-q4_k_m.gguf
 ☐ Mejorar gramática
@@ -199,14 +218,14 @@ Salir
 
 - **Idioma** — selecciona el idioma de transcripción (Español / English). Se guarda automáticamente.
 - **Modelo LLM** — selecciona qué modelo usar para corrección. Se guarda automáticamente.
-- **Mejorar gramática** — activa/desactiva corrección con LLM. Solo disponible si `llama-cli` y al menos un modelo `.gguf` están instalados.
+- **Mejorar gramática** — activa/desactiva corrección con LLM. Solo disponible si el CLI LLM y al menos un modelo `.gguf` están instalados.
 - **Ver log** — abre el log en el editor de texto por defecto.
 
 ---
 
 ## Corrección gramatical
 
-Cuando **Mejorar gramática** está activo, después de transcribir el audio el texto pasa por `llama-cli` con un prompt que corrige errores de gramática y pronunciación antes de pegarlo. Si el LLM falla o supera 30 segundos, se pega la transcripción original sin interrupción.
+Cuando **Mejorar gramática** está activo, después de transcribir el audio el texto pasa por el CLI LLM (preferentemente `llama-completion`) con un prompt de sistema que corrige errores de gramática y pronunciación antes de pegarlo. La app cierra `stdin` del proceso para forzar ejecución single-shot y extrae solo la respuesta del bloque `assistant`. Si el LLM falla o supera 30 segundos, se pega la transcripción original sin interrupción.
 
 Útil para aprender inglés: habla aunque cometas errores — el texto que se pega siempre será correcto.
 
@@ -225,6 +244,7 @@ Cuando **Mejorar gramática** está activo, después de transcribir el audio el 
 
 **`❌ llama-cli no encontrado`**
 - `brew install llama.cpp`
+- Verifica si existe `llama-completion`: `which llama-completion`
 
 **Sin modelos en `~/.config/whisperwlopezob/llm/`**
 - Descarga un modelo `.gguf` en esa carpeta (ver paso 6)
@@ -251,11 +271,11 @@ Cuando **Mejorar gramática** está activo, después de transcribir el audio el 
 
 ```
 main.rs        — Event loop (winit), tray icon, coordinador principal
-config.rs      — Auto-detección de whisper-cli, llama-cli y modelos
+config.rs      — Auto-detección de whisper-cli, CLI LLM (llama-completion/llama-cli) y modelos
 defaults.rs    — Constantes y valores por defecto (fuente única de verdad)
 recorder.rs    — Grabación de audio (cpal + hound, 16kHz mono PCM)
 transcriber.rs — Invocación de whisper-cli con timeout de 60s
-llm.rs         — Corrección gramatical con llama-cli (timeout 30s, fallback silencioso)
+llm.rs         — Corrección gramatical con CLI LLM (timeout 30s, parseo bloque `assistant`, fallback silencioso)
 hotkey.rs      — Registro del hotkey global ⌘⌥W
 db.rs          — Persistencia de configuración (SQLite, tabla settings clave-valor)
 logger.rs      — Log dual: consola + archivo (auto-recreado si se elimina)
