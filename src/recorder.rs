@@ -4,10 +4,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use hound::{WavSpec, WavWriter};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const OUTPUT_PATH: &str = "/tmp/whisperbar_recording.wav";
+const SAMPLE_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub struct Recorder {
     stream: Option<Stream>,
@@ -120,6 +121,18 @@ impl Recorder {
             .map(|t| t.elapsed().as_secs_f64())
             .unwrap_or(0.0);
 
+        // En algunos equipos, al soltar el hotkey puede haber una pequeña latencia
+        // entre el fin de grabación y la llegada del primer callback de audio.
+        if self.samples.lock().unwrap().is_empty() && self.stream.is_some() {
+            let wait_start = Instant::now();
+            while wait_start.elapsed() < SAMPLE_DRAIN_TIMEOUT {
+                if !self.samples.lock().unwrap().is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
         // Detener el stream (drop libera CoreAudio)
         self.stream = None;
         self.start_time = None;
@@ -127,7 +140,10 @@ impl Recorder {
         let samples = self.samples.lock().unwrap().clone();
 
         if samples.is_empty() {
-            return Err("No se capturó audio".to_string());
+            return Err(format!(
+                "No se capturó audio (duración={:.2}s, rate={}Hz, canales={})",
+                duration, self.device_sample_rate, self.device_channels
+            ));
         }
 
         // Resample si el dispositivo no es 16kHz nativo

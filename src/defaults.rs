@@ -33,8 +33,10 @@ pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
     "/usr/bin/whisper-cli",
 ];
 
-/// Rutas candidatas de llama-cli (llama.cpp via Homebrew)
+/// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
-    "/opt/homebrew/bin/llama-cli", // Apple Silicon
-    "/usr/local/bin/llama-cli",    // Intel
+    "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)
+    "/usr/local/bin/llama-completion",    // Intel (preferido)
+    "/opt/homebrew/bin/llama-cli",        // fallback legacy
+    "/usr/local/bin/llama-cli",           // fallback legacy
 ];

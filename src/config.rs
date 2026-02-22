@@ -49,7 +49,7 @@ impl Config {
         None
     }
 
-    /// Busca llama-cli en rutas conocidas de Homebrew
+    /// Busca CLI LLM en rutas conocidas (prioriza llama-completion)
     fn detect_llama_cli() -> Option<String> {
         for path in defaults::LLAMA_CLI_CANDIDATES {
             if is_executable(path) {
@@ -57,12 +57,14 @@ impl Config {
             }
         }
 
-        // Fallback: `which llama-cli`
-        if let Ok(output) = Command::new("which").arg("llama-cli").output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() && is_executable(&path) {
-                    return Some(path);
+        // Fallback: `which llama-completion` y luego `which llama-cli`
+        for bin in ["llama-completion", "llama-cli"] {
+            if let Ok(output) = Command::new("which").arg(bin).output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !path.is_empty() && is_executable(&path) {
+                        return Some(path);
+                    }
                 }
             }
         }
@@ -132,7 +134,7 @@ impl Config {
         is_executable(&self.llama_cli_path)
     }
 
-    /// llama-cli disponible Y al menos un modelo .gguf en LLM_MODELS_SUBDIR
+    /// CLI LLM disponible Y al menos un modelo .gguf en LLM_MODELS_SUBDIR
     pub fn is_llm_available(&self) -> bool {
         self.is_llama_cli_valid() && !self.llm_models.is_empty()
     }

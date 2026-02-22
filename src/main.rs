@@ -296,6 +296,18 @@ impl WhisperApp {
         let label = if *enabled { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
         if let Some(ref item) = self.improve_item { item.set_text(label); }
         log::info!("Mejorar gramática: {}", if *enabled { "activado" } else { "desactivado" });
+        if *enabled {
+            let selected_model = self.llm_model.lock().unwrap().clone();
+            if !self.config.is_llm_available() {
+                log::warn!(
+                    "LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)"
+                );
+            } else if selected_model.is_empty() {
+                log::warn!("LLM habilitado, pero sin modelo seleccionado");
+            } else {
+                log::info!("LLM listo. Modelo activo: {}", selected_model);
+            }
+        }
     }
 
     /// Selecciona el modelo LLM activo y actualiza checkmarks
@@ -509,11 +521,33 @@ fn handle_hotkey_released(
                     let use_llm = *llm_enabled.lock().unwrap();
                     let selected_model = llm_model.lock().unwrap().clone();
                     let llama_cli = config.llama_cli_path.clone();
+                    let llm_available = config.is_llm_available();
                     let llm_model_path = if use_llm && !selected_model.is_empty() {
                         config.llm_model_path(&selected_model)
                     } else {
                         None
                     };
+                    if use_llm {
+                        if !llm_available {
+                            log::warn!(
+                                "LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)"
+                            );
+                        } else if selected_model.is_empty() {
+                            log::warn!("LLM habilitado, pero sin modelo seleccionado");
+                        } else if llm_model_path.is_some() {
+                            log::info!(
+                                "LLM habilitado para esta transcripción (modelo: {})",
+                                selected_model
+                            );
+                        } else {
+                            log::warn!(
+                                "LLM habilitado, pero el modelo '{}' no existe en disco",
+                                selected_model
+                            );
+                        }
+                    } else {
+                        log::debug!("LLM deshabilitado para esta transcripción");
+                    }
 
                     std::thread::spawn(move || {
                         match transcriber::transcribe(&cli, &model, &lang, &audio_path) {
@@ -521,9 +555,22 @@ fn handle_hotkey_released(
                                 log::info!("✅ Transcripción: \"{}\"", text);
 
                                 let final_text = if let Some(ref lm_path) = llm_model_path {
-                                    log::info!("🔧 Corrigiendo con LLM...");
+                                    log::info!(
+                                        "🔧 LLM: iniciando corrección (modelo: {})",
+                                        selected_model
+                                    );
+                                    let llm_start = Instant::now();
                                     match llm::correct_grammar(&llama_cli, lm_path, &text) {
                                         Ok(corrected) => {
+                                            log::info!(
+                                                "✅ LLM aplicado en {:.2}s",
+                                                llm_start.elapsed().as_secs_f64()
+                                            );
+                                            if corrected == text {
+                                                log::info!("LLM completado: sin cambios en el texto");
+                                            } else {
+                                                log::info!("LLM completado: texto corregido");
+                                            }
                                             log::info!("✅ Corregido: \"{}\"", corrected);
                                             corrected
                                         }
@@ -533,6 +580,11 @@ fn handle_hotkey_released(
                                         }
                                     }
                                 } else {
+                                    if use_llm {
+                                        log::warn!(
+                                            "LLM no se aplicó por configuración incompleta en esta transcripción"
+                                        );
+                                    }
                                     text
                                 };
 
@@ -546,7 +598,11 @@ fn handle_hotkey_released(
                     });
                 }
                 Err(e) => {
-                    log::error!("Error al detener grabación: {}", e);
+                    if e.starts_with("No se capturó audio") {
+                        log::warn!("Grabación descartada: {}", e);
+                    } else {
+                        log::error!("Error al detener grabación: {}", e);
+                    }
                     *state = AppState::Idle;
                     let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
                 }
