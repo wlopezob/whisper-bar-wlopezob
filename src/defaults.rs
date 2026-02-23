@@ -36,6 +36,16 @@ pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
 /// Idioma destino de traducción por defecto
 pub const TRANSLATE_DEST_LANG: &str = "es";
 
+/// Prompt de corrección gramatical por defecto para inglés.
+/// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
+pub const GRAMMAR_PROMPT_EN: &str =
+    "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words. /no_think";
+
+/// Prompt de corrección gramatical por defecto para español.
+/// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
+pub const GRAMMAR_PROMPT_ES: &str =
+    "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
+
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)

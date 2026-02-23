@@ -53,6 +53,8 @@ struct WhisperApp {
     current_language: Arc<Mutex<String>>,
     llm_enabled: Arc<Mutex<bool>>,
     llm_model: Arc<Mutex<String>>,
+    grammar_prompt_es: Arc<Mutex<String>>,
+    grammar_prompt_en: Arc<Mutex<String>>,
     translate_enabled: Arc<Mutex<bool>>,
     translate_dest_lang: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
@@ -80,6 +82,8 @@ impl WhisperApp {
         let language = db.get("language", defaults::LANGUAGE);
         let llm_enabled = db.get("llm_enabled", "false") == "true";
         let llm_model = db.get("llm_model", "");
+        let grammar_prompt_es = db.get("grammar_prompt_es", defaults::GRAMMAR_PROMPT_ES);
+        let grammar_prompt_en = db.get("grammar_prompt_en", defaults::GRAMMAR_PROMPT_EN);
         let translate_enabled = db.get("translate_enabled", "false") == "true";
         let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
 
@@ -112,6 +116,8 @@ impl WhisperApp {
             current_language: Arc::new(Mutex::new(language)),
             llm_enabled: Arc::new(Mutex::new(llm_enabled)),
             llm_model: Arc::new(Mutex::new(llm_model)),
+            grammar_prompt_es: Arc::new(Mutex::new(grammar_prompt_es)),
+            grammar_prompt_en: Arc::new(Mutex::new(grammar_prompt_en)),
             translate_enabled: Arc::new(Mutex::new(translate_enabled)),
             translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
             ui_tx,
@@ -349,6 +355,21 @@ impl WhisperApp {
             });
         }
 
+        let prompt_es = if v.grammar_prompt_es.is_empty() {
+            defaults::GRAMMAR_PROMPT_ES.to_string()
+        } else {
+            v.grammar_prompt_es.clone()
+        };
+        let prompt_en = if v.grammar_prompt_en.is_empty() {
+            defaults::GRAMMAR_PROMPT_EN.to_string()
+        } else {
+            v.grammar_prompt_en.clone()
+        };
+        *self.grammar_prompt_es.lock().unwrap() = prompt_es.clone();
+        *self.grammar_prompt_en.lock().unwrap() = prompt_en.clone();
+        self.db.set("grammar_prompt_es", &prompt_es);
+        self.db.set("grammar_prompt_en", &prompt_en);
+
         // Traducción
         *self.translate_enabled.lock().unwrap() = v.translate_enabled;
         self.db.set("translate_enabled", if v.translate_enabled { "true" } else { "false" });
@@ -403,6 +424,8 @@ impl ApplicationHandler for WhisperApp {
                     language: self.current_language.lock().unwrap().clone(),
                     grammar_enabled: *self.llm_enabled.lock().unwrap(),
                     grammar_model: self.llm_model.lock().unwrap().clone(),
+                    grammar_prompt_es: self.grammar_prompt_es.lock().unwrap().clone(),
+                    grammar_prompt_en: self.grammar_prompt_en.lock().unwrap().clone(),
                     translate_enabled: *self.translate_enabled.lock().unwrap(),
                     translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
                 };
@@ -433,6 +456,8 @@ impl ApplicationHandler for WhisperApp {
                         &self.current_language,
                         &self.llm_enabled,
                         &self.llm_model,
+                        &self.grammar_prompt_es,
+                        &self.grammar_prompt_en,
                         &self.translate_enabled,
                         &self.translate_dest_lang,
                     ),
@@ -455,7 +480,7 @@ fn main() {
     // (sin icono en Dock, solo barra de menú) — reemplaza init_macos_app()
     let event_loop = EventLoop::builder()
         .with_activation_policy(ActivationPolicy::Accessory)
-        .with_default_menu(false)
+        .with_default_menu(true)
         .build()
         .expect("Error creando event loop");
 
@@ -523,6 +548,8 @@ fn handle_hotkey_released(
     current_language: &Arc<Mutex<String>>,
     llm_enabled: &Arc<Mutex<bool>>,
     llm_model: &Arc<Mutex<String>>,
+    grammar_prompt_es: &Arc<Mutex<String>>,
+    grammar_prompt_en: &Arc<Mutex<String>>,
     translate_enabled: &Arc<Mutex<bool>>,
     translate_dest_lang: &Arc<Mutex<String>>,
 ) {
@@ -558,6 +585,8 @@ fn handle_hotkey_released(
                     let use_llm = *llm_enabled.lock().unwrap();
                     let selected_model = llm_model.lock().unwrap().clone();
                     let llama_cli = config.llama_cli_path.clone();
+                    let prompt_es = grammar_prompt_es.lock().unwrap().clone();
+                    let prompt_en = grammar_prompt_en.lock().unwrap().clone();
                     let llm_available = config.is_llm_available();
                     let llm_model_path = if use_llm && !selected_model.is_empty() {
                         config.llm_model_path(&selected_model)
@@ -566,6 +595,13 @@ fn handle_hotkey_released(
                     };
                     let use_translate = *translate_enabled.lock().unwrap();
                     let dest_lang = translate_dest_lang.lock().unwrap().clone();
+                    log::info!(
+                        "🧭 Pipeline: 1/3 transcripción → 2/3 corrección LLM → 3/3 traducción (origen: {}, destino: {}, llm: {}, traducción: {})",
+                        lang,
+                        dest_lang,
+                        if use_llm { "activa" } else { "desactivada" },
+                        if use_translate { "activa" } else { "desactivada" }
+                    );
                     if use_llm {
                         if !llm_available {
                             log::warn!(
@@ -589,17 +625,30 @@ fn handle_hotkey_released(
                     }
 
                     std::thread::spawn(move || {
+                        log::info!("🧭 Paso 1/3: iniciando transcripción");
                         match transcriber::transcribe(&cli, &model, &lang, &audio_path) {
                             Ok(text) => {
+                                log::info!("✅ Paso 1/3 completado");
                                 log::info!("✅ Transcripción: \"{}\"", text);
 
                                 let final_text = if let Some(ref lm_path) = llm_model_path {
+                                    log::info!("🧭 Paso 2/3: iniciando corrección gramatical");
                                     log::info!(
                                         "🔧 LLM: iniciando corrección (modelo: {})",
                                         selected_model
                                     );
                                     let llm_start = Instant::now();
-                                    match llm::correct_grammar(&llama_cli, lm_path, &text, &lang) {
+                                    let system_prompt = if lang == "es" {
+                                        prompt_es.as_str()
+                                    } else {
+                                        prompt_en.as_str()
+                                    };
+                                    log::info!(
+                                        "🧩 LLM prompt activo (idioma: {}): {}",
+                                        if lang == "es" { "es" } else { "en" },
+                                        system_prompt.replace('\n', "\\n")
+                                    );
+                                    match llm::correct_grammar(&llama_cli, lm_path, &text, system_prompt) {
                                         Ok(corrected) => {
                                             log::info!(
                                                 "✅ LLM aplicado en {:.2}s",
@@ -610,42 +659,73 @@ fn handle_hotkey_released(
                                             } else {
                                                 log::info!("LLM completado: texto corregido");
                                             }
+                                            log::info!("✅ Paso 2/3 completado");
                                             log::info!("✅ Corregido: \"{}\"", corrected);
                                             corrected
                                         }
                                         Err(e) => {
+                                            log::warn!("⚠️ Paso 2/3 falló; se mantiene transcripción original");
                                             log::warn!("LLM falló (usando transcripción original): {}", e);
                                             text
                                         }
                                     }
                                 } else {
                                     if use_llm {
+                                        log::warn!("⏭ Paso 2/3 omitido: mejora gramatical sin modelo/configuración válida");
                                         log::warn!(
                                             "LLM no se aplicó por configuración incompleta en esta transcripción"
                                         );
+                                    } else {
+                                        log::info!("⏭ Paso 2/3 omitido: mejora gramatical desactivada");
                                     }
                                     text
                                 };
 
                                 let final_text = if use_translate && dest_lang != lang {
                                     if let Some(ref lm_path) = llm_model_path {
+                                        log::info!(
+                                            "🧭 Paso 3/3: iniciando traducción ({} → {})",
+                                            lang,
+                                            dest_lang
+                                        );
                                         match llm::translate_text(&llama_cli, lm_path, &final_text, &dest_lang) {
-                                            Ok(t) => { log::info!("✅ Traducción completada"); t }
-                                            Err(e) => { log::warn!("Traducción falló: {}", e); final_text }
+                                            Ok(t) => {
+                                                log::info!("✅ Paso 3/3 completado");
+                                                log::info!("✅ Traducción completada");
+                                                t
+                                            }
+                                            Err(e) => {
+                                                log::warn!("⚠️ Paso 3/3 falló; se mantiene texto previo");
+                                                log::warn!("Traducción falló: {}", e);
+                                                final_text
+                                            }
                                         }
                                     } else {
+                                        log::warn!("⏭ Paso 3/3 omitido: traducción activa pero sin modelo LLM disponible");
                                         log::warn!("Traducción solicitada pero sin modelo LLM disponible");
                                         final_text
                                     }
                                 } else {
+                                    if !use_translate {
+                                        log::info!("⏭ Paso 3/3 omitido: traducción desactivada");
+                                    } else {
+                                        log::info!(
+                                            "⏭ Paso 3/3 omitido: idioma destino igual al origen ({})",
+                                            lang
+                                        );
+                                    }
                                     final_text
                                 };
 
+                                log::info!("🏁 Pipeline completado");
                                 if ui_tx.send(UiMsg::PasteText(final_text)).is_err() {
                                     log::error!("No se pudo enviar PasteText al hilo UI");
                                 }
                             }
-                            Err(e) => log::error!("Error de transcripción: {}", e),
+                            Err(e) => {
+                                log::error!("❌ Paso 1/3 falló: {}", e);
+                                log::error!("Error de transcripción: {}", e);
+                            }
                         }
                         let mut s = app_state.lock().unwrap();
                         *s = AppState::Idle;

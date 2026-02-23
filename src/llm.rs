@@ -6,28 +6,21 @@ use std::time::Duration;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
 
-const GRAMMAR_PROMPT_EN: &str =
-    "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words.";
-
-const GRAMMAR_PROMPT_ES: &str =
-    "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido.";
-
 const TRANSLATE_PROMPT_TO_ES: &str =
-    "Translate the following text to Spanish. Return ONLY the Spanish translation.";
+    "Translate the following text to Spanish. Return ONLY the Spanish translation. /no_think";
 
 const TRANSLATE_PROMPT_TO_EN: &str =
-    "Traduce el siguiente texto al inglés. Devuelve ÚNICAMENTE la traducción en inglés.";
+    "Traduce el siguiente texto al inglés. Devuelve ÚNICAMENTE la traducción en inglés. /no_think";
 
 /// Corrige errores gramaticales y de pronunciación usando el CLI LLM configurado.
-/// `language` debe ser "en" o "es"; cualquier otro valor usa el prompt en inglés.
+/// `system_prompt` viene de configuración (prompt por idioma).
 pub fn correct_grammar(
     llama_cli_path: &str,
     model_path: &str,
     text: &str,
-    language: &str,
+    system_prompt: &str,
 ) -> Result<String, String> {
-    let prompt = if language == "es" { GRAMMAR_PROMPT_ES } else { GRAMMAR_PROMPT_EN };
-    run_llm(llama_cli_path, model_path, prompt, text)
+    run_llm(llama_cli_path, model_path, system_prompt, text)
 }
 
 /// Traduce texto usando el CLI LLM configurado.
@@ -117,14 +110,14 @@ fn parse_llm_output(raw: &str) -> String {
     // system\n...\nuser\n...\nassistant\n<respuesta>\n> EOF by user
     if let Some(range) = clean.rfind("assistant\n") {
         let after_assistant = &clean[range + "assistant\n".len()..];
-        let parsed = collect_llm_lines(after_assistant, true);
+        let parsed = sanitize_llm_text(&collect_llm_lines(after_assistant, true));
         if !parsed.is_empty() {
             return parsed;
         }
     }
 
     // Fallback si no aparece el marcador "assistant"
-    collect_llm_lines(&clean, false)
+    sanitize_llm_text(&collect_llm_lines(&clean, false))
 }
 
 /// Elimina secuencias de escape ANSI del texto
@@ -189,6 +182,34 @@ fn collect_llm_lines(s: &str, after_assistant: bool) -> String {
     lines.join(" ").trim().to_string()
 }
 
+fn sanitize_llm_text(s: &str) -> String {
+    let without_think_blocks = strip_think_blocks(s);
+    let without_think_tags = without_think_blocks
+        .replace("<think>", " ")
+        .replace("</think>", " ");
+    without_think_tags.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn strip_think_blocks(s: &str) -> String {
+    let mut out = s.to_string();
+    let open = "<think>";
+    let close = "</think>";
+
+    loop {
+        let Some(start) = out.find(open) else { break };
+        if let Some(end_rel) = out[start + open.len()..].find(close) {
+            let end = start + open.len() + end_rel + close.len();
+            out.replace_range(start..end, " ");
+        } else {
+            // Si vino un <think> sin cierre, elimina desde ahí hasta el final.
+            out.replace_range(start..out.len(), " ");
+            break;
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +251,24 @@ mod tests {
             parse_llm_output(input),
             "Could you help me send a message to Mama?"
         );
+    }
+
+    #[test]
+    fn test_parse_llm_output_removes_think_block() {
+        let input = "assistant\n<think>reasoning</think> Haciendo pruebas de sonido\n> EOF by user\n";
+        assert_eq!(parse_llm_output(input), "Haciendo pruebas de sonido");
+    }
+
+    #[test]
+    fn test_parse_llm_output_removes_empty_think_block() {
+        let input = "assistant\n<think> </think> Performing sound tests\n";
+        assert_eq!(parse_llm_output(input), "Performing sound tests");
+    }
+
+    #[test]
+    fn test_parse_llm_output_only_think_returns_empty() {
+        let input = "assistant\n<think>internal reasoning</think>\n";
+        assert_eq!(parse_llm_output(input), "");
     }
 
     #[test]

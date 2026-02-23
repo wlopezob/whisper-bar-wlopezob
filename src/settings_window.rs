@@ -7,8 +7,8 @@ use objc2::runtime::{AnyObject, NSObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
-    NSModalResponseOK, NSPanel, NSPopUpButton, NSSegmentedControl, NSSegmentSwitchTracking,
-    NSTextField, NSView, NSWindowStyleMask,
+    NSModalResponseOK, NSPanel, NSPopUpButton, NSScrollView, NSSegmentedControl,
+    NSSegmentSwitchTracking, NSTextField, NSTextView, NSView, NSWindowButton, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -16,6 +16,8 @@ pub struct SettingsValues {
     pub language: String,
     pub grammar_enabled: bool,
     pub grammar_model: String,
+    pub grammar_prompt_es: String,
+    pub grammar_prompt_en: String,
     pub translate_enabled: bool,
     pub translate_dest: String,
 }
@@ -77,27 +79,31 @@ pub fn show_settings_modal(
     available_models: &[String],
 ) -> Option<SettingsValues> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
 
     // ── Panel ──────────────────────────────────────────────────────────────
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
-        rect(0.0, 0.0, 420.0, 370.0),
+        rect(0.0, 0.0, 420.0, 520.0),
         NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
         NSBackingStoreType::Buffered,
         false,
     );
     panel.setTitle(&NSString::from_str("Configuración"));
+    panel.setFloatingPanel(true);
+    panel.setBecomesKeyOnlyIfNeeded(false);
+    panel.setHidesOnDeactivate(false);
     panel.center();
 
     let cv: Retained<NSView> = panel.contentView().unwrap();
 
     // ── TRANSCRIPCIÓN ──────────────────────────────────────────────────────
-    cv.addSubview(&section_header("TRANSCRIPCIÓN", 20.0, 320.0, mtm));
-    cv.addSubview(&label("Idioma:", 20.0, 295.0, 60.0, mtm));
+    cv.addSubview(&section_header("TRANSCRIPCIÓN", 20.0, 470.0, mtm));
+    cv.addSubview(&label("Idioma:", 20.0, 445.0, 60.0, mtm));
 
     let seg_lang = NSSegmentedControl::initWithFrame(
         NSSegmentedControl::alloc(mtm),
-        rect(80.0, 290.0, 210.0, 26.0),
+        rect(80.0, 440.0, 210.0, 26.0),
     );
     seg_lang.setSegmentCount(2);
     seg_lang.setLabel_forSegment(&NSString::from_str("Español"), 0);
@@ -107,7 +113,7 @@ pub fn show_settings_modal(
     cv.addSubview(&seg_lang);
 
     // ── MEJORA GRAMATICAL ──────────────────────────────────────────────────
-    cv.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 255.0, mtm));
+    cv.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 400.0, mtm));
 
     let chk_grammar = unsafe { NSButton::checkboxWithTitle_target_action(
         &NSString::from_str("Activar mejora gramatical"),
@@ -115,14 +121,14 @@ pub fn show_settings_modal(
         None,
         mtm,
     ) };
-    chk_grammar.setFrame(rect(20.0, 228.0, 280.0, 22.0));
+    chk_grammar.setFrame(rect(20.0, 373.0, 280.0, 22.0));
     chk_grammar.setState(if current.grammar_enabled { NSControlStateValueOn } else { NSControlStateValueOff });
     cv.addSubview(&chk_grammar);
 
-    cv.addSubview(&label("Modelo:", 20.0, 198.0, 60.0, mtm));
+    cv.addSubview(&label("Modelo:", 20.0, 343.0, 60.0, mtm));
     let popup_model = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(85.0, 195.0, 295.0, 26.0),
+        rect(85.0, 340.0, 295.0, 26.0),
         false,
     );
     if available_models.is_empty() {
@@ -140,8 +146,44 @@ pub fn show_settings_modal(
     }
     cv.addSubview(&popup_model);
 
+    cv.addSubview(&label("Prompt ES:", 20.0, 313.0, 120.0, mtm));
+    let scroll_prompt_es = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        rect(20.0, 248.0, 380.0, 62.0),
+    );
+    scroll_prompt_es.setHasVerticalScroller(true);
+    scroll_prompt_es.setHasHorizontalScroller(false);
+    let txt_prompt_es = NSTextView::initWithFrame(
+        NSTextView::alloc(mtm),
+        rect(0.0, 0.0, 380.0, 62.0),
+    );
+    txt_prompt_es.setEditable(true);
+    txt_prompt_es.setSelectable(true);
+    txt_prompt_es.setRichText(false);
+    txt_prompt_es.setString(&NSString::from_str(&current.grammar_prompt_es));
+    scroll_prompt_es.setDocumentView(Some(txt_prompt_es.as_ref()));
+    cv.addSubview(&scroll_prompt_es);
+
+    cv.addSubview(&label("Prompt EN:", 20.0, 221.0, 120.0, mtm));
+    let scroll_prompt_en = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        rect(20.0, 156.0, 380.0, 62.0),
+    );
+    scroll_prompt_en.setHasVerticalScroller(true);
+    scroll_prompt_en.setHasHorizontalScroller(false);
+    let txt_prompt_en = NSTextView::initWithFrame(
+        NSTextView::alloc(mtm),
+        rect(0.0, 0.0, 380.0, 62.0),
+    );
+    txt_prompt_en.setEditable(true);
+    txt_prompt_en.setSelectable(true);
+    txt_prompt_en.setRichText(false);
+    txt_prompt_en.setString(&NSString::from_str(&current.grammar_prompt_en));
+    scroll_prompt_en.setDocumentView(Some(txt_prompt_en.as_ref()));
+    cv.addSubview(&scroll_prompt_en);
+
     // ── TRADUCCIÓN ────────────────────────────────────────────────────────
-    cv.addSubview(&section_header("TRADUCCIÓN", 20.0, 158.0, mtm));
+    cv.addSubview(&section_header("TRADUCCIÓN", 20.0, 118.0, mtm));
 
     let chk_translate = unsafe { NSButton::checkboxWithTitle_target_action(
         &NSString::from_str("Activar traducción"),
@@ -149,14 +191,14 @@ pub fn show_settings_modal(
         None,
         mtm,
     ) };
-    chk_translate.setFrame(rect(20.0, 131.0, 240.0, 22.0));
+    chk_translate.setFrame(rect(20.0, 91.0, 240.0, 22.0));
     chk_translate.setState(if current.translate_enabled { NSControlStateValueOn } else { NSControlStateValueOff });
     cv.addSubview(&chk_translate);
 
-    cv.addSubview(&label("Idioma destino:", 20.0, 101.0, 110.0, mtm));
+    cv.addSubview(&label("Idioma destino:", 20.0, 61.0, 110.0, mtm));
     let popup_dest = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(135.0, 98.0, 140.0, 26.0),
+        rect(135.0, 58.0, 140.0, 26.0),
         false,
     );
     popup_dest.addItemWithTitle(&NSString::from_str("Español"));
@@ -168,6 +210,15 @@ pub fn show_settings_modal(
 
     // ── Botones Cancelar / Aplicar ────────────────────────────────────────
     let delegate = ModalDelegate::new();
+
+    // Fuerza que el botón nativo "X" siga el mismo flujo que Cancelar.
+    if let Some(close_btn) = panel.standardWindowButton(NSWindowButton::CloseButton) {
+        let delegate_obj: &AnyObject = &*delegate;
+        unsafe {
+            close_btn.setTarget(Some(delegate_obj));
+            close_btn.setAction(Some(sel!(cancelClicked:)));
+        }
+    }
 
     let btn_cancel = unsafe { NSButton::buttonWithTitle_target_action(
         &NSString::from_str("Cancelar"),
@@ -188,8 +239,18 @@ pub fn show_settings_modal(
     cv.addSubview(&btn_apply);
 
     // ── Ejecutar modal (bloquea hasta Aplicar / Cancelar / cierre) ────────
-    let app = NSApplication::sharedApplication(mtm);
+    // En apps "Accessory" (sin Dock) forzamos foco para evitar modal invisible.
+    app.activate();
+    panel.center();
+    panel.makeKeyAndOrderFront(None);
+    panel.orderFrontRegardless();
+    let f = panel.frame();
+    log::debug!(
+        "UI: settings panel abierto (x={}, y={}, w={}, h={})",
+        f.origin.x, f.origin.y, f.size.width, f.size.height
+    );
     let response = app.runModalForWindow(&panel);
+    log::debug!("UI: settings panel cerrado (response={:?})", response);
 
     // Ocultar el panel explícitamente — runModalForWindow no lo hace solo
     panel.orderOut(None);
@@ -214,6 +275,18 @@ pub fn show_settings_modal(
         if title == "— seleccionar modelo —" { String::new() } else { title }
     };
 
+    let grammar_prompt_es = txt_prompt_es
+        .string()
+        .to_string()
+        .trim()
+        .to_string();
+
+    let grammar_prompt_en = txt_prompt_en
+        .string()
+        .to_string()
+        .trim()
+        .to_string();
+
     let translate_enabled = chk_translate.state() == NSControlStateValueOn;
 
     let translate_dest = popup_dest
@@ -225,6 +298,8 @@ pub fn show_settings_modal(
         language,
         grammar_enabled,
         grammar_model,
+        grammar_prompt_es,
+        grammar_prompt_en,
         translate_enabled,
         translate_dest,
     })
