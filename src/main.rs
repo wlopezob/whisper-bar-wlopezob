@@ -7,7 +7,10 @@ mod hotkey;
 mod llm;
 mod logger;
 mod recorder;
+mod settings_window;
 mod transcriber;
+
+use settings_window::{SettingsValues, show_settings_modal};
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -49,6 +52,8 @@ struct WhisperApp {
     current_language: Arc<Mutex<String>>,
     llm_enabled: Arc<Mutex<bool>>,
     llm_model: Arc<Mutex<String>>,
+    translate_enabled: Arc<Mutex<bool>>,
+    translate_dest_lang: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -56,6 +61,7 @@ struct WhisperApp {
     tray: Option<TrayIcon>,
     quit_id: Option<tray_icon::menu::MenuId>,
     log_id: Option<tray_icon::menu::MenuId>,
+    settings_id: Option<tray_icon::menu::MenuId>,
     lang_es_id: Option<tray_icon::menu::MenuId>,
     lang_en_id: Option<tray_icon::menu::MenuId>,
     lang_es_item: Option<tray_icon::menu::MenuItem>,
@@ -76,6 +82,8 @@ impl WhisperApp {
         let language = db.get("language", defaults::LANGUAGE);
         let llm_enabled = db.get("llm_enabled", "false") == "true";
         let llm_model = db.get("llm_model", "");
+        let translate_enabled = db.get("translate_enabled", "false") == "true";
+        let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
 
         log::info!("=== whisperwlopezob v0.1.0 ===");
         log::info!(
@@ -106,11 +114,14 @@ impl WhisperApp {
             current_language: Arc::new(Mutex::new(language)),
             llm_enabled: Arc::new(Mutex::new(llm_enabled)),
             llm_model: Arc::new(Mutex::new(llm_model)),
+            translate_enabled: Arc::new(Mutex::new(translate_enabled)),
+            translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
             ui_tx,
             ui_rx,
             tray: None,
             quit_id: None,
             log_id: None,
+            settings_id: None,
             lang_es_id: None,
             lang_en_id: None,
             lang_es_item: None,
@@ -207,6 +218,8 @@ impl WhisperApp {
         let improve_item = MenuItem::new(improve_label, improve_enabled, None);
         let improve_id = improve_item.id().clone();
 
+        let settings_item = MenuItem::new("Configuración...", true, None);
+        let settings_id = settings_item.id().clone();
         let ver_log_item = MenuItem::new("Ver log", true, None);
         let ver_log_id = ver_log_item.id().clone();
         let log_path_item = MenuItem::new(format!("Log: {}", logger::log_path()), false, None);
@@ -234,6 +247,8 @@ impl WhisperApp {
         }
         let _ = menu.append(&improve_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&settings_item);
+        let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&log_path_item);
         let _ = menu.append(&ver_log_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
@@ -251,6 +266,7 @@ impl WhisperApp {
                 self.tray = Some(tray);
                 self.quit_id = Some(quit_id);
                 self.log_id = Some(ver_log_id);
+                self.settings_id = Some(settings_id);
                 self.lang_es_id = Some(lang_es_id);
                 self.lang_en_id = Some(lang_en_id);
                 self.lang_es_item = Some(lang_es_item);
@@ -286,24 +302,34 @@ impl WhisperApp {
 
         log::info!("whisperwlopezob activo. Mantén ⌘⌥W para grabar, suelta para transcribir.");
         log::info!("Log en tiempo real: tail -f {}", logger::log_path());
+
+        // Solicitar permiso de micrófono al arrancar (antes del primer uso)
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            probe_microphone();
+        });
     }
 
     /// Activa o desactiva la corrección gramatical con LLM
     fn toggle_llm(&self) {
-        let mut enabled = self.llm_enabled.lock().unwrap();
-        *enabled = !*enabled;
-        self.db.set("llm_enabled", if *enabled { "true" } else { "false" });
-        let label = if *enabled { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
-        if let Some(ref item) = self.improve_item { item.set_text(label); }
-        log::info!("Mejorar gramática: {}", if *enabled { "activado" } else { "desactivado" });
-        if *enabled {
+        // Bloque separado para soltar el lock de llm_enabled antes de tocar llm_model
+        let now_enabled = {
+            let mut enabled = self.llm_enabled.lock().unwrap();
+            *enabled = !*enabled;
+            let v = *enabled;
+            self.db.set("llm_enabled", if v { "true" } else { "false" });
+            let label = if v { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
+            if let Some(ref item) = self.improve_item { item.set_text(label); }
+            log::info!("Mejorar gramática: {}", if v { "activado" } else { "desactivado" });
+            v
+        };
+
+        if now_enabled {
             let selected_model = self.llm_model.lock().unwrap().clone();
             if !self.config.is_llm_available() {
-                log::warn!(
-                    "LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)"
-                );
+                log::warn!("LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)");
             } else if selected_model.is_empty() {
-                log::warn!("LLM habilitado, pero sin modelo seleccionado");
+                log::warn!("LLM habilitado, pero sin modelo seleccionado — elige uno en Configuración...");
             } else {
                 log::info!("LLM listo. Modelo activo: {}", selected_model);
             }
@@ -339,6 +365,35 @@ impl WhisperApp {
 
         let name = if lang == "es" { "Español" } else { "English" };
         log::info!("Idioma cambiado a: {}", name);
+    }
+
+    fn apply_settings(&self, v: SettingsValues) {
+        // Idioma
+        self.set_language(&v.language);
+
+        // Gramática
+        *self.llm_enabled.lock().unwrap() = v.grammar_enabled;
+        self.db.set("llm_enabled", if v.grammar_enabled { "true" } else { "false" });
+        let label = if v.grammar_enabled { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
+        if let Some(ref item) = self.improve_item { item.set_text(label); }
+
+        *self.llm_model.lock().unwrap() = v.grammar_model.clone();
+        self.db.set("llm_model", &v.grammar_model);
+        for (_, item, name) in &self.llm_model_items {
+            item.set_text(if *name == v.grammar_model {
+                format!("✓ {}", name)
+            } else {
+                format!("  {}", name)
+            });
+        }
+
+        // Traducción
+        *self.translate_enabled.lock().unwrap() = v.translate_enabled;
+        self.db.set("translate_enabled", if v.translate_enabled { "true" } else { "false" });
+        *self.translate_dest_lang.lock().unwrap() = v.translate_dest.clone();
+        self.db.set("translate_dest_lang", &v.translate_dest);
+
+        log::info!("Configuración aplicada");
     }
 }
 
@@ -383,6 +438,20 @@ impl ApplicationHandler for WhisperApp {
                 self.set_language("en");
             } else if self.improve_id.as_ref() == Some(event.id()) {
                 self.toggle_llm();
+            } else if self.settings_id.as_ref() == Some(event.id()) {
+                let current = SettingsValues {
+                    language: self.current_language.lock().unwrap().clone(),
+                    grammar_enabled: *self.llm_enabled.lock().unwrap(),
+                    grammar_model: self.llm_model.lock().unwrap().clone(),
+                    translate_enabled: *self.translate_enabled.lock().unwrap(),
+                    translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
+                };
+                let models: Vec<String> = self.config.llm_models.iter()
+                    .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
+                    .collect();
+                if let Some(values) = show_settings_modal(&current, &models) {
+                    self.apply_settings(values);
+                }
             } else {
                 // Comprobar si es un modelo LLM
                 let clicked = self.llm_model_items.iter()
@@ -412,6 +481,8 @@ impl ApplicationHandler for WhisperApp {
                         &self.current_language,
                         &self.llm_enabled,
                         &self.llm_model,
+                        &self.translate_enabled,
+                        &self.translate_dest_lang,
                     ),
                 }
             }
@@ -479,7 +550,7 @@ fn handle_hotkey_pressed(
     }
 }
 
-/// Released: detiene grabación y lanza transcripción (+ corrección LLM si está activa)
+/// Released: detiene grabación y lanza transcripción (+ corrección LLM y/o traducción si están activas)
 fn handle_hotkey_released(
     app_state: &Arc<Mutex<AppState>>,
     recorder: &Arc<Mutex<Recorder>>,
@@ -488,6 +559,8 @@ fn handle_hotkey_released(
     current_language: &Arc<Mutex<String>>,
     llm_enabled: &Arc<Mutex<bool>>,
     llm_model: &Arc<Mutex<String>>,
+    translate_enabled: &Arc<Mutex<bool>>,
+    translate_dest_lang: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
@@ -527,6 +600,8 @@ fn handle_hotkey_released(
                     } else {
                         None
                     };
+                    let use_translate = *translate_enabled.lock().unwrap();
+                    let dest_lang = translate_dest_lang.lock().unwrap().clone();
                     if use_llm {
                         if !llm_available {
                             log::warn!(
@@ -560,7 +635,7 @@ fn handle_hotkey_released(
                                         selected_model
                                     );
                                     let llm_start = Instant::now();
-                                    match llm::correct_grammar(&llama_cli, lm_path, &text) {
+                                    match llm::correct_grammar(&llama_cli, lm_path, &text, &lang) {
                                         Ok(corrected) => {
                                             log::info!(
                                                 "✅ LLM aplicado en {:.2}s",
@@ -586,6 +661,20 @@ fn handle_hotkey_released(
                                         );
                                     }
                                     text
+                                };
+
+                                let final_text = if use_translate && dest_lang != lang {
+                                    if let Some(ref lm_path) = llm_model_path {
+                                        match llm::translate_text(&llama_cli, lm_path, &final_text, &dest_lang) {
+                                            Ok(t) => { log::info!("✅ Traducción completada"); t }
+                                            Err(e) => { log::warn!("Traducción falló: {}", e); final_text }
+                                        }
+                                    } else {
+                                        log::warn!("Traducción solicitada pero sin modelo LLM disponible");
+                                        final_text
+                                    }
+                                } else {
+                                    final_text
                                 };
 
                                 paste_text(&final_text);
@@ -644,6 +733,44 @@ fn paste_text(text: &str) {
             }
         }
     });
+}
+
+/// Abre y cierra un stream de audio brevemente para que macOS muestre
+/// el diálogo de permiso de micrófono al arrancar la app, no al grabar.
+fn probe_microphone() {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::SampleFormat;
+
+    let host = cpal::default_host();
+    let Some(device) = host.default_input_device() else {
+        log::warn!("Micrófono: ❌ no se detectó dispositivo de entrada");
+        log::warn!("→ System Settings → Privacy & Security → Microphone → activa whisperwlopezob");
+        return;
+    };
+    let Ok(supported) = device.default_input_config() else {
+        return;
+    };
+    let config: cpal::StreamConfig = supported.clone().into();
+    let result = match supported.sample_format() {
+        SampleFormat::I16 => device
+            .build_input_stream(&config, |_: &[i16], _| {}, |_| {}, None)
+            .map(|_| ()),
+        SampleFormat::F32 => device
+            .build_input_stream(&config, |_: &[f32], _| {}, |_| {}, None)
+            .map(|_| ()),
+        SampleFormat::U8 => device
+            .build_input_stream(&config, |_: &[u8], _| {}, |_| {}, None)
+            .map(|_| ()),
+        _ => return,
+    };
+    match result {
+        Ok(_stream) => log::info!("Micrófono: ✅ permiso concedido"),
+        Err(e) => {
+            log::warn!("Micrófono: ❌ sin permiso ({})", e);
+            log::warn!("→ System Settings → Privacy & Security → Microphone → activa whisperwlopezob");
+        }
+    }
+    // _stream se descarta aquí, liberando el audio unit
 }
 
 fn simulate_paste() -> Result<(), String> {

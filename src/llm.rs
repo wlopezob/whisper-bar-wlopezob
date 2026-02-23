@@ -5,19 +5,54 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
-const LLM_SYSTEM_PROMPT: &str =
+
+const GRAMMAR_PROMPT_EN: &str =
     "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words.";
 
+const GRAMMAR_PROMPT_ES: &str =
+    "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido.";
+
+const TRANSLATE_PROMPT_TO_ES: &str =
+    "Translate the following text to Spanish. Return ONLY the Spanish translation.";
+
+const TRANSLATE_PROMPT_TO_EN: &str =
+    "Traduce el siguiente texto al inglés. Devuelve ÚNICAMENTE la traducción en inglés.";
+
 /// Corrige errores gramaticales y de pronunciación usando el CLI LLM configurado.
+/// `language` debe ser "en" o "es"; cualquier otro valor usa el prompt en inglés.
 pub fn correct_grammar(
     llama_cli_path: &str,
     model_path: &str,
+    text: &str,
+    language: &str,
+) -> Result<String, String> {
+    let prompt = if language == "es" { GRAMMAR_PROMPT_ES } else { GRAMMAR_PROMPT_EN };
+    run_llm(llama_cli_path, model_path, prompt, text)
+}
+
+/// Traduce texto usando el CLI LLM configurado.
+/// `dest_lang`: "es" → español; cualquier otro valor → inglés.
+pub fn translate_text(
+    llama_cli_path: &str,
+    model_path: &str,
+    text: &str,
+    dest_lang: &str,
+) -> Result<String, String> {
+    let prompt = if dest_lang == "es" { TRANSLATE_PROMPT_TO_ES } else { TRANSLATE_PROMPT_TO_EN };
+    run_llm(llama_cli_path, model_path, prompt, text)
+}
+
+/// Lanza `llama-cli` con el prompt de sistema indicado y retorna el texto parseado.
+fn run_llm(
+    llama_cli_path: &str,
+    model_path: &str,
+    system_prompt: &str,
     text: &str,
 ) -> Result<String, String> {
     let mut child = Command::new(llama_cli_path)
         .args([
             "-m", model_path,
-            "-sys", LLM_SYSTEM_PROMPT,
+            "-sys", system_prompt,
             "-p", text,
             "-n", "512",
             "-ngl", "99",
@@ -54,13 +89,13 @@ pub fn correct_grammar(
                     buf
                 }).unwrap_or_default();
 
-                let corrected = parse_llm_output(&stdout);
+                let result = parse_llm_output(&stdout);
 
-                if corrected.is_empty() {
+                if result.is_empty() {
                     return Err("llama-cli no devolvió texto".to_string());
                 }
 
-                return Ok(corrected);
+                return Ok(result);
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
@@ -195,5 +230,17 @@ mod tests {
             parse_llm_output(input),
             "Could you help me send a message to Mama?"
         );
+    }
+
+    #[test]
+    fn test_translate_prompt_to_es() {
+        let prompt = if "es" == "es" { TRANSLATE_PROMPT_TO_ES } else { TRANSLATE_PROMPT_TO_EN };
+        assert_eq!(prompt, TRANSLATE_PROMPT_TO_ES);
+    }
+
+    #[test]
+    fn test_translate_prompt_to_en() {
+        let prompt = if "en" == "es" { TRANSLATE_PROMPT_TO_ES } else { TRANSLATE_PROMPT_TO_EN };
+        assert_eq!(prompt, TRANSLATE_PROMPT_TO_EN);
     }
 }
