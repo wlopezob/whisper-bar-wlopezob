@@ -1,6 +1,6 @@
 # whisperwlopezob
 
-App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con `whisper-cli` y pega el texto donde está el cursor. Opcionalmente corrige gramática y pronunciación con un LLM local (preferentemente `llama-completion`, fallback `llama-cli`).
+App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con `whisper-cli` y pega el texto donde está el cursor. Opcionalmente corrige gramática con un LLM local y/o traduce el resultado al idioma destino configurado.
 
 **Hotkey:** `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar.
 
@@ -25,7 +25,7 @@ Todo vive bajo un único directorio:
 ├── data.db                 # configuración persistente (SQLite)
 ├── whisper-models/         # modelos de Whisper (.bin)
 │   └── ggml-large-v3.bin
-└── llm/                    # modelos LLM para corrección gramatical (.gguf)
+└── llm/                    # modelos LLM para corrección y traducción (.gguf)
     └── qwen2.5-1.5b-instruct-q4_k_m.gguf
 ```
 
@@ -92,9 +92,9 @@ curl -L -o ~/.config/whisperwlopezob/whisper-models/ggml-large-v3.bin \
 
 > La app detecta automáticamente el mejor modelo disponible con esta prioridad: `large-v3 → large-v2 → medium → small → base → tiny`
 
-### 6. (Opcional) Corrección gramatical con LLM local
+### 6. (Opcional) Corrección gramatical y traducción con LLM local
 
-Para corregir automáticamente errores de gramática y pronunciación después de transcribir:
+Para corregir automáticamente errores de gramática o traducir después de transcribir:
 
 ```bash
 brew install llama.cpp
@@ -105,7 +105,7 @@ curl -L -o ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
   https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
 ```
 
-> Puedes colocar múltiples modelos `.gguf` en `~/.config/whisperwlopezob/llm/`. Todos aparecerán en el menú para seleccionar.
+> Puedes colocar múltiples modelos `.gguf` en `~/.config/whisperwlopezob/llm/`. Todos aparecerán en la ventana de configuración para seleccionar.
 
 #### Probar `llama-completion` directamente en consola
 
@@ -157,7 +157,7 @@ Pasos:
 
 ### Micrófono
 
-macOS lo solicita automáticamente la primera vez que grabes. Si fue denegado:
+La app solicita el permiso de micrófono automáticamente **500ms después de arrancar** (antes de la primera grabación). Si fue denegado:
 
 **System Settings → Privacy & Security → Microphone** → activa **whisperwlopezob**
 
@@ -210,24 +210,83 @@ Modelo LLM:
   ✓ qwen2.5-1.5b-instruct-q4_k_m.gguf
 ☐ Mejorar gramática
 ─────────────────────────────────────────
+Configuración...
+─────────────────────────────────────────
 Log: ~/.config/whisperwlopezob/whisperwlopezob.log
 Ver log
 ─────────────────────────────────────────
 Salir
 ```
 
-- **Idioma** — selecciona el idioma de transcripción (Español / English). Se guarda automáticamente.
-- **Modelo LLM** — selecciona qué modelo usar para corrección. Se guarda automáticamente.
-- **Mejorar gramática** — activa/desactiva corrección con LLM. Solo disponible si el CLI LLM y al menos un modelo `.gguf` están instalados.
+- **Idioma** — muestra el idioma de transcripción activo (solo lectura, cámbialo en Configuración).
+- **Modelo LLM** — muestra el modelo activo con checkmark (solo lectura, cámbialo en Configuración).
+- **Mejorar gramática** — muestra si la corrección gramatical está activa (solo lectura).
+- **Configuración...** — abre la ventana nativa de configuración.
 - **Ver log** — abre el log en el editor de texto por defecto.
+
+---
+
+## Ventana de configuración
+
+Al hacer clic en **Configuración...** se abre un panel nativo macOS (NSPanel modal) con tres secciones:
+
+```
+┌──────────────────────────────────────────┐
+│  Configuración                     [X]  │
+├──────────────────────────────────────────┤
+│  TRANSCRIPCIÓN                           │
+│  Idioma:  (●) Español   (○) English     │
+│                                          │
+│  MEJORA GRAMATICAL                       │
+│  [☐] Activar mejora gramatical          │
+│  Modelo: [▼ — seleccionar modelo —  ]   │
+│                                          │
+│  TRADUCCIÓN                              │
+│  [☐] Activar traducción                 │
+│  Idioma destino: [▼ Español         ]   │
+│                                          │
+│               [Cancelar]   [Aplicar]    │
+└──────────────────────────────────────────┘
+```
+
+**TRANSCRIPCIÓN**
+- Selecciona el idioma de transcripción: Español (`es`) o English (`en`).
+
+**MEJORA GRAMATICAL**
+- Activa o desactiva la corrección automática de gramática y pronunciación usando el LLM local.
+- Selecciona el modelo `.gguf` a usar. Si no hay modelo seleccionado (muestra `— seleccionar modelo —`), la corrección no se aplica aunque el toggle esté activo.
+- El prompt de corrección se ajusta automáticamente al idioma de transcripción.
+
+**TRADUCCIÓN**
+- Activa o desactiva la traducción del texto transcrito (y corregido) al idioma destino.
+- Solo se traduce si el idioma destino es diferente al idioma de transcripción.
+- Requiere que un modelo LLM esté seleccionado.
+
+Pulsar **Aplicar** guarda todos los cambios en la base de datos y actualiza el tray. Pulsar **Cancelar** o cerrar la ventana descarta los cambios.
 
 ---
 
 ## Corrección gramatical
 
-Cuando **Mejorar gramática** está activo, después de transcribir el audio el texto pasa por el CLI LLM (preferentemente `llama-completion`) con un prompt de sistema que corrige errores de gramática y pronunciación antes de pegarlo. La app cierra `stdin` del proceso para forzar ejecución single-shot y extrae solo la respuesta del bloque `assistant`. Si el LLM falla o supera 30 segundos, se pega la transcripción original sin interrupción.
+Cuando **Mejorar gramática** está activo y hay un modelo seleccionado, después de transcribir el audio el texto pasa por el CLI LLM con un prompt de sistema que varía según el idioma:
+
+- **Español:** _"Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido."_
+- **English:** _"Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words."_
+
+Si el LLM falla o supera 30 segundos, se pega la transcripción original sin interrupción.
 
 Útil para aprender inglés: habla aunque cometas errores — el texto que se pega siempre será correcto.
+
+---
+
+## Traducción
+
+Cuando **Traducción** está activa y el idioma destino es distinto al idioma de transcripción, el texto (ya corregido si corresponde) pasa por el LLM con un prompt de traducción:
+
+- **Destino Español:** _"Translate the following text to Spanish. Return ONLY the Spanish translation."_
+- **Destino English:** _"Traduce el siguiente texto al inglés. Devuelve ÚNICAMENTE la traducción en inglés."_
+
+Si la traducción falla o supera 30 segundos, se pega el texto sin traducir.
 
 ---
 
@@ -257,28 +316,36 @@ Cuando **Mejorar gramática** está activo, después de transcribir el audio el 
 - Habilita Accesibilidad (necesario para simular `⌘V`)
 - Asegúrate de que el cursor esté en un campo de texto
 
+**Mejora gramatical no se aplica aunque esté activada**
+- Abre Configuración... y selecciona un modelo LLM en el desplegable (si aparece `— seleccionar modelo —` no hay modelo activo)
+
+**La traducción no se aplica**
+- Verifica que el idioma destino sea diferente al idioma de transcripción
+- Verifica que haya un modelo LLM seleccionado en Configuración...
+
 **La transcripción tarda mucho**
 - Usa un modelo más pequeño (`ggml-base.bin` o `ggml-tiny.bin`)
 - Timeout máximo: 60 segundos
 
-**La corrección LLM tarda mucho**
-- Usa un modelo más pequeño o desactiva **Mejorar gramática**
-- Timeout máximo: 30 segundos (usa transcripción original como fallback)
+**La corrección LLM o traducción tarda mucho**
+- Usa un modelo más pequeño o desactiva las opciones en Configuración...
+- Timeout máximo: 30 segundos por operación (usa el texto previo como fallback)
 
 ---
 
 ## Arquitectura
 
 ```
-main.rs        — Event loop (winit), tray icon, coordinador principal
-config.rs      — Auto-detección de whisper-cli, CLI LLM (llama-completion/llama-cli) y modelos
-defaults.rs    — Constantes y valores por defecto (fuente única de verdad)
-recorder.rs    — Grabación de audio (cpal + hound, 16kHz mono PCM)
-transcriber.rs — Invocación de whisper-cli con timeout de 60s
-llm.rs         — Corrección gramatical con CLI LLM (timeout 30s, parseo bloque `assistant`, fallback silencioso)
-hotkey.rs      — Registro del hotkey global ⌘⌥W
-db.rs          — Persistencia de configuración (SQLite, tabla settings clave-valor)
-logger.rs      — Log dual: consola + archivo (auto-recreado si se elimina)
+main.rs           — Event loop (winit), tray icon, coordinador principal
+config.rs         — Auto-detección de whisper-cli, CLI LLM y modelos
+defaults.rs       — Constantes y valores por defecto (fuente única de verdad)
+recorder.rs       — Grabación de audio (cpal + hound, 16kHz mono PCM)
+transcriber.rs    — Invocación de whisper-cli con timeout de 60s
+llm.rs            — Corrección gramatical y traducción con CLI LLM (timeout 30s)
+hotkey.rs         — Registro del hotkey global ⌘⌥W
+db.rs             — Persistencia de configuración (SQLite, tabla settings clave-valor)
+logger.rs         — Log dual: consola + archivo (auto-recreado si se elimina)
+settings_window.rs — Ventana nativa de configuración (NSPanel modal vía objc2)
 ```
 
 **Flujo completo:**
@@ -289,7 +356,8 @@ logger.rs      — Log dual: consola + archivo (auto-recreado si se elimina)
 ⌘⌥W (release)
   └─▶ Recorder::stop()               — Escribe WAV en /tmp/
   └─▶ transcriber::transcribe()      — Ejecuta whisper-cli en thread separado
-  └─▶ [llm::correct_grammar()]       — Si "Mejorar gramática" activado
+  └─▶ [llm::correct_grammar()]       — Si "Mejorar gramática" activo y modelo seleccionado
+  └─▶ [llm::translate_text()]        — Si "Traducción" activa y destino ≠ origen
   └─▶ paste_text()
         ├─ Guarda clipboard actual
         ├─ Escribe texto al clipboard
@@ -304,3 +372,5 @@ logger.rs      — Log dual: consola + archivo (auto-recreado si se elimina)
 | `language` | `"es"` \| `"en"` | `"es"` |
 | `llm_enabled` | `"true"` \| `"false"` | `"false"` |
 | `llm_model` | nombre del archivo `.gguf` | `""` |
+| `translate_enabled` | `"true"` \| `"false"` | `"false"` |
+| `translate_dest_lang` | `"es"` \| `"en"` | `"es"` |

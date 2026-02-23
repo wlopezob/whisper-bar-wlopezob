@@ -40,6 +40,7 @@ enum AppState {
 
 enum UiMsg {
     SetTitle(&'static str),
+    PasteText(String),
 }
 
 // ── Struct principal que implementa el ApplicationHandler de winit ─────────────
@@ -62,14 +63,11 @@ struct WhisperApp {
     quit_id: Option<tray_icon::menu::MenuId>,
     log_id: Option<tray_icon::menu::MenuId>,
     settings_id: Option<tray_icon::menu::MenuId>,
-    lang_es_id: Option<tray_icon::menu::MenuId>,
-    lang_en_id: Option<tray_icon::menu::MenuId>,
     lang_es_item: Option<tray_icon::menu::MenuItem>,
     lang_en_item: Option<tray_icon::menu::MenuItem>,
-    improve_id: Option<tray_icon::menu::MenuId>,
     improve_item: Option<tray_icon::menu::MenuItem>,
-    // (MenuId, MenuItem, filename) — uno por cada .gguf encontrado
-    llm_model_items: Vec<(tray_icon::menu::MenuId, tray_icon::menu::MenuItem, String)>,
+    // (MenuItem, filename) — uno por cada .gguf encontrado (solo lectura en tray)
+    llm_model_items: Vec<(tray_icon::menu::MenuItem, String)>,
     _hotkey_handler: Option<HotkeyHandler>,
     hotkey_id: Option<u32>,
 }
@@ -122,11 +120,8 @@ impl WhisperApp {
             quit_id: None,
             log_id: None,
             settings_id: None,
-            lang_es_id: None,
-            lang_en_id: None,
             lang_es_item: None,
             lang_en_item: None,
-            improve_id: None,
             improve_item: None,
             llm_model_items: Vec::new(),
             _hotkey_handler: None,
@@ -163,10 +158,8 @@ impl WhisperApp {
         let cli_item = MenuItem::new(cli_label, false, None);
         let model_item = MenuItem::new(model_label, false, None);
         let lang_header = MenuItem::new("Idioma", false, None);
-        let lang_es_item = MenuItem::new(es_label, true, None);
-        let lang_en_item = MenuItem::new(en_label, true, None);
-        let lang_es_id = lang_es_item.id().clone();
-        let lang_en_id = lang_en_item.id().clone();
+        let lang_es_item = MenuItem::new(es_label, false, None);
+        let lang_en_item = MenuItem::new(en_label, false, None);
         // ── Sección LLM ───────────────────────────────────────────────────────
         let llama_label = if self.config.is_llama_cli_valid() {
             format!("✅ llama-cli: {}", self.config.llama_cli_path)
@@ -178,8 +171,8 @@ impl WhisperApp {
         let selected_model = self.llm_model.lock().unwrap().clone();
         let llm_enabled_val = *self.llm_enabled.lock().unwrap();
 
-        // Un MenuItem por cada .gguf encontrado
-        let mut llm_model_entries: Vec<(tray_icon::menu::MenuId, tray_icon::menu::MenuItem, String)> = vec![];
+        // Un MenuItem informativo (solo lectura) por cada .gguf encontrado
+        let mut llm_model_entries: Vec<(tray_icon::menu::MenuItem, String)> = vec![];
         let llm_models_header = MenuItem::new("Modelo LLM:", false, None);
 
         if self.config.llm_models.is_empty() {
@@ -193,9 +186,8 @@ impl WhisperApp {
                 } else {
                     format!("  {}", filename)
                 };
-                let item = MenuItem::new(label, true, None);
-                let id = item.id().clone();
-                llm_model_entries.push((id, item, filename));
+                let item = MenuItem::new(label, false, None);
+                llm_model_entries.push((item, filename));
             }
         }
 
@@ -215,8 +207,15 @@ impl WhisperApp {
 
         let improve_enabled = self.config.is_llm_available();
         let improve_label = if llm_enabled_val { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
-        let improve_item = MenuItem::new(improve_label, improve_enabled, None);
-        let improve_id = improve_item.id().clone();
+        let improve_item = MenuItem::new(
+            if improve_enabled {
+                improve_label
+            } else {
+                "☐ Mejorar gramática (no disponible)"
+            },
+            false,
+            None,
+        );
 
         let settings_item = MenuItem::new("Configuración...", true, None);
         let settings_id = settings_item.id().clone();
@@ -242,7 +241,7 @@ impl WhisperApp {
         if let Some(ref item) = no_models_item {
             let _ = menu.append(item);
         }
-        for (_, item, _) in &llm_model_entries {
+        for (item, _) in &llm_model_entries {
             let _ = menu.append(item);
         }
         let _ = menu.append(&improve_item);
@@ -267,11 +266,8 @@ impl WhisperApp {
                 self.quit_id = Some(quit_id);
                 self.log_id = Some(ver_log_id);
                 self.settings_id = Some(settings_id);
-                self.lang_es_id = Some(lang_es_id);
-                self.lang_en_id = Some(lang_en_id);
                 self.lang_es_item = Some(lang_es_item);
                 self.lang_en_item = Some(lang_en_item);
-                self.improve_id = Some(improve_id);
                 self.improve_item = Some(improve_item);
                 self.llm_model_items = llm_model_entries;
             }
@@ -310,46 +306,6 @@ impl WhisperApp {
         });
     }
 
-    /// Activa o desactiva la corrección gramatical con LLM
-    fn toggle_llm(&self) {
-        // Bloque separado para soltar el lock de llm_enabled antes de tocar llm_model
-        let now_enabled = {
-            let mut enabled = self.llm_enabled.lock().unwrap();
-            *enabled = !*enabled;
-            let v = *enabled;
-            self.db.set("llm_enabled", if v { "true" } else { "false" });
-            let label = if v { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
-            if let Some(ref item) = self.improve_item { item.set_text(label); }
-            log::info!("Mejorar gramática: {}", if v { "activado" } else { "desactivado" });
-            v
-        };
-
-        if now_enabled {
-            let selected_model = self.llm_model.lock().unwrap().clone();
-            if !self.config.is_llm_available() {
-                log::warn!("LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)");
-            } else if selected_model.is_empty() {
-                log::warn!("LLM habilitado, pero sin modelo seleccionado — elige uno en Configuración...");
-            } else {
-                log::info!("LLM listo. Modelo activo: {}", selected_model);
-            }
-        }
-    }
-
-    /// Selecciona el modelo LLM activo y actualiza checkmarks
-    fn select_llm_model(&self, filename: &str) {
-        *self.llm_model.lock().unwrap() = filename.to_string();
-        self.db.set("llm_model", filename);
-        for (_, item, name) in &self.llm_model_items {
-            item.set_text(if name == filename {
-                format!("✓ {}", name)
-            } else {
-                format!("  {}", name)
-            });
-        }
-        log::info!("Modelo LLM seleccionado: {}", filename);
-    }
-
     /// Cambia el idioma activo, actualiza checkmarks en el menú y persiste en DB
     fn set_language(&self, lang: &str) {
         *self.current_language.lock().unwrap() = lang.to_string();
@@ -374,12 +330,18 @@ impl WhisperApp {
         // Gramática
         *self.llm_enabled.lock().unwrap() = v.grammar_enabled;
         self.db.set("llm_enabled", if v.grammar_enabled { "true" } else { "false" });
-        let label = if v.grammar_enabled { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
+        let label = if !self.config.is_llm_available() {
+            "☐ Mejorar gramática (no disponible)".to_string()
+        } else if v.grammar_enabled {
+            "☑ Mejorar gramática".to_string()
+        } else {
+            "☐ Mejorar gramática".to_string()
+        };
         if let Some(ref item) = self.improve_item { item.set_text(label); }
 
         *self.llm_model.lock().unwrap() = v.grammar_model.clone();
         self.db.set("llm_model", &v.grammar_model);
-        for (_, item, name) in &self.llm_model_items {
+        for (item, name) in &self.llm_model_items {
             item.set_text(if *name == v.grammar_model {
                 format!("✓ {}", name)
             } else {
@@ -418,6 +380,10 @@ impl ApplicationHandler for WhisperApp {
                         log::debug!("UI: set_title → {}", title);
                         let _ = tray.set_title(Some(title));
                     }
+                    UiMsg::PasteText(text) => {
+                        log::debug!("UI: paste_text ({} chars)", text.chars().count());
+                        paste_text(&text);
+                    }
                 }
             }
         }
@@ -432,12 +398,6 @@ impl ApplicationHandler for WhisperApp {
                     .arg("-t")
                     .arg(logger::log_path())
                     .spawn();
-            } else if self.lang_es_id.as_ref() == Some(event.id()) {
-                self.set_language("es");
-            } else if self.lang_en_id.as_ref() == Some(event.id()) {
-                self.set_language("en");
-            } else if self.improve_id.as_ref() == Some(event.id()) {
-                self.toggle_llm();
             } else if self.settings_id.as_ref() == Some(event.id()) {
                 let current = SettingsValues {
                     language: self.current_language.lock().unwrap().clone(),
@@ -451,14 +411,6 @@ impl ApplicationHandler for WhisperApp {
                     .collect();
                 if let Some(values) = show_settings_modal(&current, &models) {
                     self.apply_settings(values);
-                }
-            } else {
-                // Comprobar si es un modelo LLM
-                let clicked = self.llm_model_items.iter()
-                    .find(|(id, _, _)| id == event.id())
-                    .map(|(_, _, name)| name.clone());
-                if let Some(filename) = clicked {
-                    self.select_llm_model(&filename);
                 }
             }
         }
@@ -497,6 +449,7 @@ impl ApplicationHandler for WhisperApp {
 
 fn main() {
     logger::init();
+    install_panic_hook();
 
     // winit se encarga de inicializar NSApplication con política Accessory
     // (sin icono en Dock, solo barra de menú) — reemplaza init_macos_app()
@@ -509,6 +462,17 @@ fn main() {
     let mut app = WhisperApp::new();
 
     event_loop.run_app(&mut app).expect("Error en event loop");
+}
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("PANIC: {}", info);
+        if let Some(loc) = info.location() {
+            log::error!("PANIC location: {}:{}:{}", loc.file(), loc.line(), loc.column());
+        }
+        let bt = std::backtrace::Backtrace::force_capture();
+        log::error!("PANIC backtrace:\n{:?}", bt);
+    }));
 }
 
 /// Verifica si el proceso tiene permiso de Accessibility en macOS
@@ -677,7 +641,9 @@ fn handle_hotkey_released(
                                     final_text
                                 };
 
-                                paste_text(&final_text);
+                                if ui_tx.send(UiMsg::PasteText(final_text)).is_err() {
+                                    log::error!("No se pudo enviar PasteText al hilo UI");
+                                }
                             }
                             Err(e) => log::error!("Error de transcripción: {}", e),
                         }
