@@ -63,6 +63,8 @@ struct WhisperApp {
     azure_mai_key: Arc<Mutex<String>>,
     azure_mai_region: Arc<Mutex<String>>,
     azure_mai_model: Arc<Mutex<String>>,
+    azure_mai_api_version: Arc<Mutex<String>>,
+    azure_mai_definition: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -97,6 +99,8 @@ impl WhisperApp {
         let azure_mai_key = db.get("azure_mai_key", "");
         let azure_mai_region = db.get("azure_mai_region", "");
         let azure_mai_model = db.get("azure_mai_model", "");
+        let azure_mai_api_version = db.get("azure_mai_api_version", defaults::AZURE_MAI_API_VERSION);
+        let azure_mai_definition = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
 
         log::info!("=== whisperwlopezob v0.1.0 ===");
         log::info!(
@@ -140,6 +144,8 @@ impl WhisperApp {
             azure_mai_key: Arc::new(Mutex::new(azure_mai_key)),
             azure_mai_region: Arc::new(Mutex::new(azure_mai_region)),
             azure_mai_model: Arc::new(Mutex::new(azure_mai_model)),
+            azure_mai_api_version: Arc::new(Mutex::new(azure_mai_api_version)),
+            azure_mai_definition: Arc::new(Mutex::new(azure_mai_definition)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -418,14 +424,29 @@ impl WhisperApp {
         self.db.set("azure_mai_region", &v.azure_mai_region);
         *self.azure_mai_model.lock().unwrap() = v.azure_mai_model.clone();
         self.db.set("azure_mai_model", &v.azure_mai_model);
+        let api_ver = if v.azure_mai_api_version.is_empty() {
+            defaults::AZURE_MAI_API_VERSION.to_string()
+        } else {
+            v.azure_mai_api_version.clone()
+        };
+        let definition = if v.azure_mai_definition.is_empty() {
+            defaults::AZURE_MAI_DEFINITION.to_string()
+        } else {
+            v.azure_mai_definition.clone()
+        };
+        *self.azure_mai_api_version.lock().unwrap() = api_ver.clone();
+        self.db.set("azure_mai_api_version", &api_ver);
+        *self.azure_mai_definition.lock().unwrap() = definition.clone();
+        self.db.set("azure_mai_definition", &definition);
         if let Some(ref item) = self.azure_item {
             item.set_text(azure_status_label(v.azure_mai_enabled, &v.azure_mai_region));
         }
         log::info!(
-            "Azure MAI: {} región={} modelo={}",
+            "Azure MAI: {} región={} api-version={} definition={}",
             if v.azure_mai_enabled { "activo" } else { "inactivo" },
             if v.azure_mai_region.is_empty() { "—" } else { &v.azure_mai_region },
-            if v.azure_mai_model.is_empty() { "default" } else { &v.azure_mai_model },
+            api_ver,
+            definition,
         );
 
         log::info!("Configuración aplicada");
@@ -484,6 +505,8 @@ impl ApplicationHandler for WhisperApp {
                     azure_mai_key: self.azure_mai_key.lock().unwrap().clone(),
                     azure_mai_region: self.azure_mai_region.lock().unwrap().clone(),
                     azure_mai_model: self.azure_mai_model.lock().unwrap().clone(),
+                    azure_mai_api_version: self.azure_mai_api_version.lock().unwrap().clone(),
+                    azure_mai_definition: self.azure_mai_definition.lock().unwrap().clone(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
@@ -523,6 +546,8 @@ impl ApplicationHandler for WhisperApp {
                         &self.azure_mai_key,
                         &self.azure_mai_region,
                         &self.azure_mai_model,
+                        &self.azure_mai_api_version,
+                        &self.azure_mai_definition,
                     ),
                 }
             }
@@ -630,6 +655,8 @@ fn handle_hotkey_released(
     azure_mai_key: &Arc<Mutex<String>>,
     azure_mai_region: &Arc<Mutex<String>>,
     azure_mai_model_ref: &Arc<Mutex<String>>,
+    azure_mai_api_version_ref: &Arc<Mutex<String>>,
+    azure_mai_definition_ref: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
@@ -677,7 +704,9 @@ fn handle_hotkey_released(
                     let use_azure = *azure_mai_enabled.lock().unwrap();
                     let azure_key = azure_mai_key.lock().unwrap().clone();
                     let azure_region = azure_mai_region.lock().unwrap().clone();
-                    let azure_model = azure_mai_model_ref.lock().unwrap().clone();
+                    let _azure_model = azure_mai_model_ref.lock().unwrap().clone();
+                    let azure_api_version = azure_mai_api_version_ref.lock().unwrap().clone();
+                    let azure_definition = azure_mai_definition_ref.lock().unwrap().clone();
                     log::info!(
                         "🧭 Pipeline: 1/3 transcripción → 2/3 corrección LLM → 3/3 traducción (origen: {}, destino: {}, llm: {}, traducción: {})",
                         lang,
@@ -715,8 +744,8 @@ fn handle_hotkey_released(
                             azure_transcriber::transcribe(
                                 &azure_key,
                                 &azure_region,
-                                &azure_model,
-                                &lang,
+                                &azure_api_version,
+                                &azure_definition,
                                 &audio_path,
                             )
                         } else {

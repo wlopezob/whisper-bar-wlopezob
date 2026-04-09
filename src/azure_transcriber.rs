@@ -1,52 +1,41 @@
 // src/azure_transcriber.rs
-// Transcripción vía Azure MAI Transcribe REST API
+// Transcripción vía Azure MAI Transcribe REST API (LLM Speech API)
 // Documentación: https://learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe
 
 use reqwest::blocking::Client;
-use serde_json::json;
 use std::time::Duration;
 
 /// Envía el audio WAV a Azure MAI Transcribe y devuelve el texto transcrito.
 ///
-/// - `api_key`  : Clave de suscripción de Azure Cognitive Services
-/// - `region`   : Región de Azure (p.ej. "eastus", "westeurope")
-/// - `model`    : Nombre del modelo base (p.ej. "whisper"). Vacío → usa el modelo por defecto del servicio
-/// - `language` : Código de idioma interno ("es" | "en")
-/// - `audio_path`: Ruta al archivo WAV grabado
+/// - `api_key`    : Clave de suscripción de Azure Cognitive Services
+/// - `region`     : Región de Azure (p.ej. "eastus", "westeurope")
+/// - `api_version`: Versión de la API (default: crate::defaults::AZURE_MAI_API_VERSION)
+/// - `definition` : JSON del campo `definition` en el form-data
+///                  (default: crate::defaults::AZURE_MAI_DEFINITION)
+/// - `audio_path` : Ruta al archivo WAV grabado
 pub fn transcribe(
     api_key: &str,
     region: &str,
-    model: &str,
-    language: &str,
+    api_version: &str,
+    definition: &str,
     audio_path: &str,
 ) -> Result<String, String> {
+    let api_ver = if api_version.trim().is_empty() {
+        crate::defaults::AZURE_MAI_API_VERSION
+    } else {
+        api_version.trim()
+    };
+
+    let definition_str = if definition.trim().is_empty() {
+        crate::defaults::AZURE_MAI_DEFINITION
+    } else {
+        definition.trim()
+    };
+
     let url = format!(
         "https://{}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version={}",
-        region,
-        crate::defaults::AZURE_MAI_API_VERSION,
+        region, api_ver,
     );
-
-    // Locale BCP-47 según idioma seleccionado
-    let locale = lang_to_locale(language);
-
-    // Definición de la transcripción — con o sin modelo explícito
-    let definition = if model.is_empty() {
-        json!({
-            "locales": [locale],
-            "channels": [0]
-        })
-    } else {
-        json!({
-            "model": {
-                "self": format!(
-                    "https://{}.api.cognitive.microsoft.com/speechtotext/models/base/{}?api-version={}",
-                    region, model, crate::defaults::AZURE_MAI_API_VERSION
-                )
-            },
-            "locales": [locale],
-            "channels": [0]
-        })
-    };
 
     // Leer el archivo de audio
     let audio_bytes = std::fs::read(audio_path)
@@ -59,7 +48,7 @@ pub fn transcribe(
         .map_err(|e| format!("Error MIME audio/wav: {}", e))?;
 
     let form = reqwest::blocking::multipart::Form::new()
-        .text("definition", definition.to_string())
+        .text("definition", definition_str.to_string())
         .part("audio", audio_part);
 
     let client = Client::builder()
@@ -67,10 +56,9 @@ pub fn transcribe(
         .build()
         .map_err(|e| format!("Error creando cliente HTTP: {}", e))?;
 
-    let model_label = if model.is_empty() { "default" } else { model };
     log::info!(
-        "Azure MAI: enviando audio → región={} modelo={} locale={}",
-        region, model_label, locale
+        "Azure MAI: enviando audio → región={} api-version={} definition={}",
+        region, api_ver, definition_str
     );
 
     let response = client
@@ -86,7 +74,6 @@ pub fn transcribe(
         .map_err(|e| format!("Error leyendo respuesta de Azure: {}", e))?;
 
     if !status.is_success() {
-        // Mostrar los primeros 300 caracteres del body para ayudar al diagnóstico
         let preview = &body[..body.len().min(300)];
         return Err(format!(
             "Azure MAI respondió con error HTTP {}: {}",
@@ -115,13 +102,4 @@ pub fn transcribe(
     }
 
     Ok(text)
-}
-
-/// Mapea código de idioma interno a locale BCP-47 requerido por Azure
-fn lang_to_locale(lang: &str) -> &str {
-    match lang {
-        "es" => "es-ES",
-        "en" => "en-US",
-        _ => lang,
-    }
 }
