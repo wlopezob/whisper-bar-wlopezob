@@ -39,9 +39,6 @@ pub const TRANSLATE_DEST_LANG: &str = "es";
 /// Versión de la API de Azure MAI Transcribe
 pub const AZURE_MAI_API_VERSION: &str = "2024-11-15";
 
-/// Versión de la API de Azure MAI Transcribe
-pub const AZURE_MAI_API_VERSION: &str = "2024-11-15";
-
 /// Prompt de corrección gramatical por defecto para inglés.
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
 pub const GRAMMAR_PROMPT_EN: &str =
@@ -51,6 +48,7 @@ pub const GRAMMAR_PROMPT_EN: &str =
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
 pub const GRAMMAR_PROMPT_ES: &str =
     "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
+
 
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
