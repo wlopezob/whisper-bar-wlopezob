@@ -7,8 +7,8 @@ use objc2::runtime::{AnyObject, NSObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
-    NSModalResponseOK, NSPanel, NSPopUpButton, NSSegmentedControl, NSSegmentSwitchTracking,
-    NSTextField, NSView, NSWindowStyleMask,
+    NSModalResponseOK, NSPanel, NSPopUpButton, NSScrollView, NSSegmentedControl,
+    NSSegmentSwitchTracking, NSTextField, NSTextView, NSView, NSWindowButton, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -16,6 +16,8 @@ pub struct SettingsValues {
     pub language: String,
     pub grammar_enabled: bool,
     pub grammar_model: String,
+    pub grammar_prompt_es: String,
+    pub grammar_prompt_en: String,
     pub translate_enabled: bool,
     pub translate_dest: String,
     // Azure MAI Transcribe
@@ -95,6 +97,7 @@ pub fn show_settings_modal(
     available_models: &[String],
 ) -> Option<SettingsValues> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
 
     // ── Panel (560px de alto para incluir la sección Azure MAI) ──────────────
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
@@ -105,6 +108,9 @@ pub fn show_settings_modal(
         false,
     );
     panel.setTitle(&NSString::from_str("Configuración"));
+    panel.setFloatingPanel(true);
+    panel.setBecomesKeyOnlyIfNeeded(false);
+    panel.setHidesOnDeactivate(false);
     panel.center();
 
     let cv: Retained<NSView> = panel.contentView().unwrap();
@@ -124,20 +130,8 @@ pub fn show_settings_modal(
     seg_lang.setSelectedSegment(if current.language == "es" { 0 } else { 1 });
     cv.addSubview(&seg_lang);
 
-    cv.addSubview(&label("Backend:", 20.0, 448.0, 65.0, mtm));
-    let seg_backend = NSSegmentedControl::initWithFrame(
-        NSSegmentedControl::alloc(mtm),
-        rect(88.0, 443.0, 240.0, 26.0),
-    );
-    seg_backend.setSegmentCount(2);
-    seg_backend.setLabel_forSegment(&NSString::from_str("Local (Whisper)"), 0);
-    seg_backend.setLabel_forSegment(&NSString::from_str("Azure MAI"), 1);
-    seg_backend.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
-    seg_backend.setSelectedSegment(if current.azure_mai_enabled { 1 } else { 0 });
-    cv.addSubview(&seg_backend);
-
-    // ── AZURE MAI TRANSCRIBE ───────────────────────────────────────────────────
-    cv.addSubview(&section_header("AZURE MAI TRANSCRIBE", 20.0, 405.0, mtm));
+    // ── MEJORA GRAMATICAL ──────────────────────────────────────────────────
+    cv.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 255.0, mtm));
 
     cv.addSubview(&label("API Key:", 20.0, 378.0, 60.0, mtm));
     let tf_key = input_field(&current.azure_mai_key, 85.0, 375.0, 315.0, mtm);
@@ -230,31 +224,46 @@ pub fn show_settings_modal(
     // ── Botones Cancelar / Aplicar ─────────────────────────────────────────────
     let delegate = ModalDelegate::new();
 
-    let btn_cancel = unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Cancelar"),
-            Some(&*delegate),
-            Some(sel!(cancelClicked:)),
-            mtm,
-        )
-    };
+    // Fuerza que el botón nativo "X" siga el mismo flujo que Cancelar.
+    if let Some(close_btn) = panel.standardWindowButton(NSWindowButton::CloseButton) {
+        let delegate_obj: &AnyObject = &*delegate;
+        unsafe {
+            close_btn.setTarget(Some(delegate_obj));
+            close_btn.setAction(Some(sel!(cancelClicked:)));
+        }
+    }
+
+    let btn_cancel = unsafe { NSButton::buttonWithTitle_target_action(
+        &NSString::from_str("Cancelar"),
+        Some(&*delegate),
+        Some(sel!(cancelClicked:)),
+        mtm,
+    ) };
     btn_cancel.setFrame(rect(210.0, 15.0, 90.0, 30.0));
     cv.addSubview(&btn_cancel);
 
-    let btn_apply = unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Aplicar"),
-            Some(&*delegate),
-            Some(sel!(applyClicked:)),
-            mtm,
-        )
-    };
+    let btn_apply = unsafe { NSButton::buttonWithTitle_target_action(
+        &NSString::from_str("Aplicar"),
+        Some(&*delegate),
+        Some(sel!(applyClicked:)),
+        mtm,
+    ) };
     btn_apply.setFrame(rect(310.0, 15.0, 90.0, 30.0));
     cv.addSubview(&btn_apply);
 
-    // ── Ejecutar modal (bloquea hasta Aplicar / Cancelar / cierre) ────────────
-    let app = NSApplication::sharedApplication(mtm);
+    // ── Ejecutar modal (bloquea hasta Aplicar / Cancelar / cierre) ────────
+    // En apps "Accessory" (sin Dock) forzamos foco para evitar modal invisible.
+    app.activate();
+    panel.center();
+    panel.makeKeyAndOrderFront(None);
+    panel.orderFrontRegardless();
+    let f = panel.frame();
+    log::debug!(
+        "UI: settings panel abierto (x={}, y={}, w={}, h={})",
+        f.origin.x, f.origin.y, f.size.width, f.size.height
+    );
     let response = app.runModalForWindow(&panel);
+    log::debug!("UI: settings panel cerrado (response={:?})", response);
 
     // Ocultar el panel explícitamente — runModalForWindow no lo hace solo
     panel.orderOut(None);
@@ -293,6 +302,18 @@ pub fn show_settings_modal(
         }
     };
 
+    let grammar_prompt_es = txt_prompt_es
+        .string()
+        .to_string()
+        .trim()
+        .to_string();
+
+    let grammar_prompt_en = txt_prompt_en
+        .string()
+        .to_string()
+        .trim()
+        .to_string();
+
     let translate_enabled = chk_translate.state() == NSControlStateValueOn;
 
     let translate_dest = popup_dest
@@ -310,6 +331,8 @@ pub fn show_settings_modal(
         language,
         grammar_enabled,
         grammar_model,
+        grammar_prompt_es,
+        grammar_prompt_en,
         translate_enabled,
         translate_dest,
         azure_mai_enabled,
