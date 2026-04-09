@@ -18,6 +18,11 @@ pub struct SettingsValues {
     pub grammar_model: String,
     pub translate_enabled: bool,
     pub translate_dest: String,
+    // Azure MAI Transcribe
+    pub azure_mai_enabled: bool,
+    pub azure_mai_key: String,
+    pub azure_mai_region: String,
+    pub azure_mai_model: String,
 }
 
 // ── Delegate mínimo: solo para capturar Aplicar / Cancelar ───────────────────
@@ -67,6 +72,19 @@ fn section_header(text: &str, x: f64, y: f64, mtm: MainThreadMarker) -> Retained
     label(text, x, y, 380.0, mtm)
 }
 
+/// Crea un NSTextField editable (campo de texto de entrada)
+fn input_field(
+    initial: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    let tf = NSTextField::initWithFrame(NSTextField::alloc(mtm), rect(x, y, w, 24.0));
+    tf.setStringValue(&NSString::from_str(initial));
+    tf
+}
+
 // ── API pública ───────────────────────────────────────────────────────────────
 
 /// Muestra el panel modal de configuración.
@@ -78,10 +96,10 @@ pub fn show_settings_modal(
 ) -> Option<SettingsValues> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
-    // ── Panel ──────────────────────────────────────────────────────────────
+    // ── Panel (560px de alto para incluir la sección Azure MAI) ──────────────
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
-        rect(0.0, 0.0, 420.0, 370.0),
+        rect(0.0, 0.0, 420.0, 560.0),
         NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
         NSBackingStoreType::Buffered,
         false,
@@ -91,13 +109,13 @@ pub fn show_settings_modal(
 
     let cv: Retained<NSView> = panel.contentView().unwrap();
 
-    // ── TRANSCRIPCIÓN ──────────────────────────────────────────────────────
-    cv.addSubview(&section_header("TRANSCRIPCIÓN", 20.0, 320.0, mtm));
-    cv.addSubview(&label("Idioma:", 20.0, 295.0, 60.0, mtm));
+    // ── TRANSCRIPCIÓN ──────────────────────────────────────────────────────────
+    cv.addSubview(&section_header("TRANSCRIPCIÓN", 20.0, 510.0, mtm));
+    cv.addSubview(&label("Idioma:", 20.0, 485.0, 60.0, mtm));
 
     let seg_lang = NSSegmentedControl::initWithFrame(
         NSSegmentedControl::alloc(mtm),
-        rect(80.0, 290.0, 210.0, 26.0),
+        rect(80.0, 480.0, 210.0, 26.0),
     );
     seg_lang.setSegmentCount(2);
     seg_lang.setLabel_forSegment(&NSString::from_str("Español"), 0);
@@ -106,29 +124,63 @@ pub fn show_settings_modal(
     seg_lang.setSelectedSegment(if current.language == "es" { 0 } else { 1 });
     cv.addSubview(&seg_lang);
 
-    // ── MEJORA GRAMATICAL ──────────────────────────────────────────────────
-    cv.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 255.0, mtm));
+    cv.addSubview(&label("Backend:", 20.0, 448.0, 65.0, mtm));
+    let seg_backend = NSSegmentedControl::initWithFrame(
+        NSSegmentedControl::alloc(mtm),
+        rect(88.0, 443.0, 240.0, 26.0),
+    );
+    seg_backend.setSegmentCount(2);
+    seg_backend.setLabel_forSegment(&NSString::from_str("Local (Whisper)"), 0);
+    seg_backend.setLabel_forSegment(&NSString::from_str("Azure MAI"), 1);
+    seg_backend.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
+    seg_backend.setSelectedSegment(if current.azure_mai_enabled { 1 } else { 0 });
+    cv.addSubview(&seg_backend);
 
-    let chk_grammar = unsafe { NSButton::checkboxWithTitle_target_action(
-        &NSString::from_str("Activar mejora gramatical"),
-        None,
-        None,
-        mtm,
-    ) };
-    chk_grammar.setFrame(rect(20.0, 228.0, 280.0, 22.0));
-    chk_grammar.setState(if current.grammar_enabled { NSControlStateValueOn } else { NSControlStateValueOff });
+    // ── AZURE MAI TRANSCRIBE ───────────────────────────────────────────────────
+    cv.addSubview(&section_header("AZURE MAI TRANSCRIBE", 20.0, 405.0, mtm));
+
+    cv.addSubview(&label("API Key:", 20.0, 378.0, 60.0, mtm));
+    let tf_key = input_field(&current.azure_mai_key, 85.0, 375.0, 315.0, mtm);
+    cv.addSubview(&tf_key);
+
+    cv.addSubview(&label("Región:", 20.0, 346.0, 58.0, mtm));
+    let tf_region = input_field(&current.azure_mai_region, 82.0, 343.0, 180.0, mtm);
+    cv.addSubview(&tf_region);
+    cv.addSubview(&label("(ej: eastus)", 270.0, 346.0, 130.0, mtm));
+
+    cv.addSubview(&label("Modelo:", 20.0, 314.0, 60.0, mtm));
+    let tf_model_mai = input_field(&current.azure_mai_model, 85.0, 311.0, 180.0, mtm);
+    cv.addSubview(&tf_model_mai);
+    cv.addSubview(&label("(ej: whisper, vacío=default)", 272.0, 314.0, 140.0, mtm));
+
+    // ── MEJORA GRAMATICAL ──────────────────────────────────────────────────────
+    cv.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 273.0, mtm));
+
+    let chk_grammar = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &NSString::from_str("Activar mejora gramatical"),
+            None,
+            None,
+            mtm,
+        )
+    };
+    chk_grammar.setFrame(rect(20.0, 246.0, 280.0, 22.0));
+    chk_grammar.setState(if current.grammar_enabled {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
     cv.addSubview(&chk_grammar);
 
-    cv.addSubview(&label("Modelo:", 20.0, 198.0, 60.0, mtm));
+    cv.addSubview(&label("Modelo:", 20.0, 216.0, 60.0, mtm));
     let popup_model = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(85.0, 195.0, 295.0, 26.0),
+        rect(85.0, 213.0, 295.0, 26.0),
         false,
     );
     if available_models.is_empty() {
         popup_model.addItemWithTitle(&NSString::from_str("(sin modelos)"));
     } else {
-        // Primer ítem vacío: indica que aún no se ha elegido modelo
         popup_model.addItemWithTitle(&NSString::from_str("— seleccionar modelo —"));
         for m in available_models {
             popup_model.addItemWithTitle(&NSString::from_str(m));
@@ -136,58 +188,71 @@ pub fn show_settings_modal(
         if !current.grammar_model.is_empty() {
             popup_model.selectItemWithTitle(&NSString::from_str(&current.grammar_model));
         }
-        // Si grammar_model está vacío el placeholder queda seleccionado (primer ítem)
     }
     cv.addSubview(&popup_model);
 
-    // ── TRADUCCIÓN ────────────────────────────────────────────────────────
-    cv.addSubview(&section_header("TRADUCCIÓN", 20.0, 158.0, mtm));
+    // ── TRADUCCIÓN ─────────────────────────────────────────────────────────────
+    cv.addSubview(&section_header("TRADUCCIÓN", 20.0, 175.0, mtm));
 
-    let chk_translate = unsafe { NSButton::checkboxWithTitle_target_action(
-        &NSString::from_str("Activar traducción"),
-        None,
-        None,
-        mtm,
-    ) };
-    chk_translate.setFrame(rect(20.0, 131.0, 240.0, 22.0));
-    chk_translate.setState(if current.translate_enabled { NSControlStateValueOn } else { NSControlStateValueOff });
+    let chk_translate = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &NSString::from_str("Activar traducción"),
+            None,
+            None,
+            mtm,
+        )
+    };
+    chk_translate.setFrame(rect(20.0, 148.0, 240.0, 22.0));
+    chk_translate.setState(if current.translate_enabled {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
     cv.addSubview(&chk_translate);
 
-    cv.addSubview(&label("Idioma destino:", 20.0, 101.0, 110.0, mtm));
+    cv.addSubview(&label("Idioma destino:", 20.0, 118.0, 110.0, mtm));
     let popup_dest = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(135.0, 98.0, 140.0, 26.0),
+        rect(135.0, 115.0, 140.0, 26.0),
         false,
     );
     popup_dest.addItemWithTitle(&NSString::from_str("Español"));
     popup_dest.addItemWithTitle(&NSString::from_str("English"));
     popup_dest.selectItemWithTitle(&NSString::from_str(
-        if current.translate_dest == "es" { "Español" } else { "English" },
+        if current.translate_dest == "es" {
+            "Español"
+        } else {
+            "English"
+        },
     ));
     cv.addSubview(&popup_dest);
 
-    // ── Botones Cancelar / Aplicar ────────────────────────────────────────
+    // ── Botones Cancelar / Aplicar ─────────────────────────────────────────────
     let delegate = ModalDelegate::new();
 
-    let btn_cancel = unsafe { NSButton::buttonWithTitle_target_action(
-        &NSString::from_str("Cancelar"),
-        Some(&*delegate),
-        Some(sel!(cancelClicked:)),
-        mtm,
-    ) };
+    let btn_cancel = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Cancelar"),
+            Some(&*delegate),
+            Some(sel!(cancelClicked:)),
+            mtm,
+        )
+    };
     btn_cancel.setFrame(rect(210.0, 15.0, 90.0, 30.0));
     cv.addSubview(&btn_cancel);
 
-    let btn_apply = unsafe { NSButton::buttonWithTitle_target_action(
-        &NSString::from_str("Aplicar"),
-        Some(&*delegate),
-        Some(sel!(applyClicked:)),
-        mtm,
-    ) };
+    let btn_apply = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Aplicar"),
+            Some(&*delegate),
+            Some(sel!(applyClicked:)),
+            mtm,
+        )
+    };
     btn_apply.setFrame(rect(310.0, 15.0, 90.0, 30.0));
     cv.addSubview(&btn_apply);
 
-    // ── Ejecutar modal (bloquea hasta Aplicar / Cancelar / cierre) ────────
+    // ── Ejecutar modal (bloquea hasta Aplicar / Cancelar / cierre) ────────────
     let app = NSApplication::sharedApplication(mtm);
     let response = app.runModalForWindow(&panel);
 
@@ -198,8 +263,19 @@ pub fn show_settings_modal(
         return None;
     }
 
-    // ── Leer estado de los controles ──────────────────────────────────────
-    let language = if seg_lang.selectedSegment() == 0 { "es" } else { "en" }.to_string();
+    // ── Leer estado de los controles ───────────────────────────────────────────
+    let language = if seg_lang.selectedSegment() == 0 {
+        "es"
+    } else {
+        "en"
+    }
+    .to_string();
+
+    let azure_mai_enabled = seg_backend.selectedSegment() == 1;
+
+    let azure_mai_key = tf_key.stringValue().to_string().trim().to_string();
+    let azure_mai_region = tf_region.stringValue().to_string().trim().to_string();
+    let azure_mai_model = tf_model_mai.stringValue().to_string().trim().to_string();
 
     let grammar_enabled = chk_grammar.state() == NSControlStateValueOn;
 
@@ -210,15 +286,24 @@ pub fn show_settings_modal(
             .titleOfSelectedItem()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        // Si el usuario dejó el placeholder, no hay modelo seleccionado
-        if title == "— seleccionar modelo —" { String::new() } else { title }
+        if title == "— seleccionar modelo —" {
+            String::new()
+        } else {
+            title
+        }
     };
 
     let translate_enabled = chk_translate.state() == NSControlStateValueOn;
 
     let translate_dest = popup_dest
         .titleOfSelectedItem()
-        .map(|s| if s.to_string() == "Español" { "es".to_string() } else { "en".to_string() })
+        .map(|s| {
+            if s.to_string() == "Español" {
+                "es".to_string()
+            } else {
+                "en".to_string()
+            }
+        })
         .unwrap_or_else(|| "es".to_string());
 
     Some(SettingsValues {
@@ -227,5 +312,9 @@ pub fn show_settings_modal(
         grammar_model,
         translate_enabled,
         translate_dest,
+        azure_mai_enabled,
+        azure_mai_key,
+        azure_mai_region,
+        azure_mai_model,
     })
 }

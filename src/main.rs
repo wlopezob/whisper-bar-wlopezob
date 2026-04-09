@@ -1,5 +1,6 @@
 // src/main.rs
 
+mod azure_transcriber;
 mod config;
 mod db;
 mod defaults;
@@ -55,6 +56,11 @@ struct WhisperApp {
     llm_model: Arc<Mutex<String>>,
     translate_enabled: Arc<Mutex<bool>>,
     translate_dest_lang: Arc<Mutex<String>>,
+    // Azure MAI Transcribe
+    azure_mai_enabled: Arc<Mutex<bool>>,
+    azure_mai_key: Arc<Mutex<String>>,
+    azure_mai_region: Arc<Mutex<String>>,
+    azure_mai_model: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -66,6 +72,7 @@ struct WhisperApp {
     lang_es_item: Option<tray_icon::menu::MenuItem>,
     lang_en_item: Option<tray_icon::menu::MenuItem>,
     improve_item: Option<tray_icon::menu::MenuItem>,
+    azure_item: Option<tray_icon::menu::MenuItem>,
     // (MenuItem, filename) — uno por cada .gguf encontrado (solo lectura en tray)
     llm_model_items: Vec<(tray_icon::menu::MenuItem, String)>,
     _hotkey_handler: Option<HotkeyHandler>,
@@ -82,6 +89,10 @@ impl WhisperApp {
         let llm_model = db.get("llm_model", "");
         let translate_enabled = db.get("translate_enabled", "false") == "true";
         let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
+        let azure_mai_enabled = db.get("azure_mai_enabled", "false") == "true";
+        let azure_mai_key = db.get("azure_mai_key", "");
+        let azure_mai_region = db.get("azure_mai_region", "");
+        let azure_mai_model = db.get("azure_mai_model", "");
 
         log::info!("=== whisperwlopezob v0.1.0 ===");
         log::info!(
@@ -101,6 +112,11 @@ impl WhisperApp {
             if config.is_llama_cli_valid() { &config.llama_cli_path } else { "no encontrado" }
         );
         log::info!("modelos LLM: {} encontrados", config.llm_models.len());
+        log::info!(
+            "Azure MAI:   {} región={}",
+            if azure_mai_enabled { "✅ activo" } else { "☐ inactivo" },
+            if azure_mai_region.is_empty() { "—" } else { &azure_mai_region }
+        );
 
         let (ui_tx, ui_rx) = mpsc::channel();
 
@@ -114,6 +130,10 @@ impl WhisperApp {
             llm_model: Arc::new(Mutex::new(llm_model)),
             translate_enabled: Arc::new(Mutex::new(translate_enabled)),
             translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
+            azure_mai_enabled: Arc::new(Mutex::new(azure_mai_enabled)),
+            azure_mai_key: Arc::new(Mutex::new(azure_mai_key)),
+            azure_mai_region: Arc::new(Mutex::new(azure_mai_region)),
+            azure_mai_model: Arc::new(Mutex::new(azure_mai_model)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -123,6 +143,7 @@ impl WhisperApp {
             lang_es_item: None,
             lang_en_item: None,
             improve_item: None,
+            azure_item: None,
             llm_model_items: Vec::new(),
             _hotkey_handler: None,
             hotkey_id: None,
@@ -217,6 +238,15 @@ impl WhisperApp {
             None,
         );
 
+        // ── Azure MAI ─────────────────────────────────────────────────────────
+        let azure_enabled_val = *self.azure_mai_enabled.lock().unwrap();
+        let azure_region_val = self.azure_mai_region.lock().unwrap().clone();
+        let azure_item = MenuItem::new(
+            azure_status_label(azure_enabled_val, &azure_region_val),
+            false,
+            None,
+        );
+
         let settings_item = MenuItem::new("Configuración...", true, None);
         let settings_id = settings_item.id().clone();
         let ver_log_item = MenuItem::new("Ver log", true, None);
@@ -246,6 +276,8 @@ impl WhisperApp {
         }
         let _ = menu.append(&improve_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&azure_item);
+        let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&settings_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&log_path_item);
@@ -269,6 +301,7 @@ impl WhisperApp {
                 self.lang_es_item = Some(lang_es_item);
                 self.lang_en_item = Some(lang_en_item);
                 self.improve_item = Some(improve_item);
+                self.azure_item = Some(azure_item);
                 self.llm_model_items = llm_model_entries;
             }
             Err(e) => log::error!("Error creando tray icon: {}", e),
@@ -355,6 +388,25 @@ impl WhisperApp {
         *self.translate_dest_lang.lock().unwrap() = v.translate_dest.clone();
         self.db.set("translate_dest_lang", &v.translate_dest);
 
+        // Azure MAI Transcribe
+        *self.azure_mai_enabled.lock().unwrap() = v.azure_mai_enabled;
+        self.db.set("azure_mai_enabled", if v.azure_mai_enabled { "true" } else { "false" });
+        *self.azure_mai_key.lock().unwrap() = v.azure_mai_key.clone();
+        self.db.set("azure_mai_key", &v.azure_mai_key);
+        *self.azure_mai_region.lock().unwrap() = v.azure_mai_region.clone();
+        self.db.set("azure_mai_region", &v.azure_mai_region);
+        *self.azure_mai_model.lock().unwrap() = v.azure_mai_model.clone();
+        self.db.set("azure_mai_model", &v.azure_mai_model);
+        if let Some(ref item) = self.azure_item {
+            item.set_text(azure_status_label(v.azure_mai_enabled, &v.azure_mai_region));
+        }
+        log::info!(
+            "Azure MAI: {} región={} modelo={}",
+            if v.azure_mai_enabled { "activo" } else { "inactivo" },
+            if v.azure_mai_region.is_empty() { "—" } else { &v.azure_mai_region },
+            if v.azure_mai_model.is_empty() { "default" } else { &v.azure_mai_model },
+        );
+
         log::info!("Configuración aplicada");
     }
 }
@@ -405,6 +457,10 @@ impl ApplicationHandler for WhisperApp {
                     grammar_model: self.llm_model.lock().unwrap().clone(),
                     translate_enabled: *self.translate_enabled.lock().unwrap(),
                     translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
+                    azure_mai_enabled: *self.azure_mai_enabled.lock().unwrap(),
+                    azure_mai_key: self.azure_mai_key.lock().unwrap().clone(),
+                    azure_mai_region: self.azure_mai_region.lock().unwrap().clone(),
+                    azure_mai_model: self.azure_mai_model.lock().unwrap().clone(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
@@ -424,6 +480,9 @@ impl ApplicationHandler for WhisperApp {
                         &self.recorder,
                         &self.config,
                         &self.ui_tx,
+                        &self.azure_mai_enabled,
+                        &self.azure_mai_key,
+                        &self.azure_mai_region,
                     ),
                     HotKeyState::Released => handle_hotkey_released(
                         &self.app_state,
@@ -435,6 +494,10 @@ impl ApplicationHandler for WhisperApp {
                         &self.llm_model,
                         &self.translate_enabled,
                         &self.translate_dest_lang,
+                        &self.azure_mai_enabled,
+                        &self.azure_mai_key,
+                        &self.azure_mai_region,
+                        &self.azure_mai_model,
                     ),
                 }
             }
@@ -489,13 +552,24 @@ fn handle_hotkey_pressed(
     recorder: &Arc<Mutex<Recorder>>,
     config: &Arc<Config>,
     ui_tx: &mpsc::Sender<UiMsg>,
+    azure_mai_enabled: &Arc<Mutex<bool>>,
+    azure_mai_key: &Arc<Mutex<String>>,
+    azure_mai_region: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
     match *state {
         AppState::Idle => {
-            if !config.is_valid() {
-                log::warn!("Config inválida: verifica whisper-cli y modelo en el menú");
+            // Permitir grabación si whisper local está listo O si Azure MAI está configurado
+            let azure_on = *azure_mai_enabled.lock().unwrap();
+            let azure_key = azure_mai_key.lock().unwrap().clone();
+            let azure_region = azure_mai_region.lock().unwrap().clone();
+            let azure_ready = azure_on && !azure_key.is_empty() && !azure_region.is_empty();
+
+            if !azure_ready && !config.is_valid() {
+                log::warn!(
+                    "Config inválida: verifica whisper-cli y modelo, o activa Azure MAI con clave y región"
+                );
                 return;
             }
             let mut rec = recorder.lock().unwrap();
@@ -525,6 +599,10 @@ fn handle_hotkey_released(
     llm_model: &Arc<Mutex<String>>,
     translate_enabled: &Arc<Mutex<bool>>,
     translate_dest_lang: &Arc<Mutex<String>>,
+    azure_mai_enabled: &Arc<Mutex<bool>>,
+    azure_mai_key: &Arc<Mutex<String>>,
+    azure_mai_region: &Arc<Mutex<String>>,
+    azure_mai_model_ref: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
@@ -566,6 +644,11 @@ fn handle_hotkey_released(
                     };
                     let use_translate = *translate_enabled.lock().unwrap();
                     let dest_lang = translate_dest_lang.lock().unwrap().clone();
+                    // Azure MAI
+                    let use_azure = *azure_mai_enabled.lock().unwrap();
+                    let azure_key = azure_mai_key.lock().unwrap().clone();
+                    let azure_region = azure_mai_region.lock().unwrap().clone();
+                    let azure_model = azure_mai_model_ref.lock().unwrap().clone();
                     if use_llm {
                         if !llm_available {
                             log::warn!(
@@ -589,7 +672,21 @@ fn handle_hotkey_released(
                     }
 
                     std::thread::spawn(move || {
-                        match transcriber::transcribe(&cli, &model, &lang, &audio_path) {
+                        // Elegir backend: Azure MAI o local whisper-cli
+                        let transcription_result = if use_azure {
+                            log::info!("🔵 Azure MAI: transcribiendo (región={})...", azure_region);
+                            azure_transcriber::transcribe(
+                                &azure_key,
+                                &azure_region,
+                                &azure_model,
+                                &lang,
+                                &audio_path,
+                            )
+                        } else {
+                            transcriber::transcribe(&cli, &model, &lang, &audio_path)
+                        };
+
+                        match transcription_result {
                             Ok(text) => {
                                 log::info!("✅ Transcripción: \"{}\"", text);
 
@@ -737,6 +834,17 @@ fn probe_microphone() {
         }
     }
     // _stream se descarta aquí, liberando el audio unit
+}
+
+/// Genera la etiqueta del ítem Azure MAI en el tray menu
+fn azure_status_label(enabled: bool, region: &str) -> String {
+    if enabled && !region.is_empty() {
+        format!("☑ Azure MAI Transcribe ({})", region)
+    } else if enabled {
+        "☑ Azure MAI Transcribe (configurar región)".to_string()
+    } else {
+        "☐ Azure MAI Transcribe".to_string()
+    }
 }
 
 fn simulate_paste() -> Result<(), String> {

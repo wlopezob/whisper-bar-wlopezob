@@ -36,6 +36,9 @@ pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
 /// Idioma destino de traducción por defecto
 pub const TRANSLATE_DEST_LANG: &str = "es";
 
+/// Versión de la API de Azure MAI Transcribe
+pub const AZURE_MAI_API_VERSION: &str = "2024-11-15";
+
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)
