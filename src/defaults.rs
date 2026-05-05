@@ -36,6 +36,13 @@ pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
 /// Idioma destino de traducción por defecto
 pub const TRANSLATE_DEST_LANG: &str = "es";
 
+/// Versión de la API de Azure MAI Transcribe (LLM Speech API)
+pub const AZURE_MAI_API_VERSION: &str = "2025-10-15";
+
+/// Definition JSON por defecto para MAI-Transcribe-1
+pub const AZURE_MAI_DEFINITION: &str =
+    r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1"}}"#;
+
 /// Prompt de corrección gramatical por defecto para inglés.
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
 pub const GRAMMAR_PROMPT_EN: &str =
@@ -45,6 +52,7 @@ pub const GRAMMAR_PROMPT_EN: &str =
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
 pub const GRAMMAR_PROMPT_ES: &str =
     "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
+
 
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
