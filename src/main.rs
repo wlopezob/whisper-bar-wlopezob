@@ -1,17 +1,10 @@
 // src/main.rs
 
-mod azure_transcriber;
-mod config;
-mod db;
-mod defaults;
-mod hotkey;
-mod llm;
-mod logger;
-mod recorder;
-mod settings_window;
-mod transcriber;
-
-use settings_window::{SettingsValues, show_settings_modal};
+use whisper_bar_rust::{
+    azure_transcriber, config, db, defaults, hotkey, llm,
+    logger, recorder, transcriber,
+};
+use whisper_bar_rust::settings_window::{SettingsValues, show_settings_modal};
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -65,6 +58,14 @@ struct WhisperApp {
     azure_mai_model: Arc<Mutex<String>>,
     azure_mai_api_version: Arc<Mutex<String>>,
     azure_mai_definition: Arc<Mutex<String>>,
+    // TTS
+    tts_enabled: Arc<Mutex<bool>>,
+    tts_voice: Arc<Mutex<String>>,
+    gemini_api_key: Arc<Mutex<String>>,
+    tts_scene: Arc<Mutex<String>>,
+    tts_sample_context: Arc<Mutex<String>>,
+    tts_formatter_enabled: Arc<Mutex<bool>>,
+    tts_formatter_prompt: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -101,6 +102,14 @@ impl WhisperApp {
         let azure_mai_model = db.get("azure_mai_model", "");
         let azure_mai_api_version = db.get("azure_mai_api_version", defaults::AZURE_MAI_API_VERSION);
         let azure_mai_definition = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
+        // TTS
+        let tts_enabled = db.get("tts_enabled", "false") == "true";
+        let tts_voice = db.get("tts_voice", defaults::TTS_DEFAULT_VOICE);
+        let gemini_api_key = db.get("gemini_api_key", "");
+        let tts_scene = db.get("tts_scene", defaults::TTS_DEFAULT_SCENE);
+        let tts_sample_context = db.get("tts_sample_context", defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
+        let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
+        let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
 
         log::info!("=== whisperwlopezob v0.1.0 ===");
         log::info!(
@@ -125,6 +134,12 @@ impl WhisperApp {
             if azure_mai_enabled { "✅ activo" } else { "☐ inactivo" },
             if azure_mai_region.is_empty() { "—" } else { &azure_mai_region }
         );
+        log::info!(
+            "TTS:         {} voz={} gemini_key={}",
+            if tts_enabled { "✅ activo" } else { "☐ inactivo" },
+            tts_voice,
+            if gemini_api_key.is_empty() { "vacía" } else { "configurada" }
+        );
 
         let (ui_tx, ui_rx) = mpsc::channel();
 
@@ -146,6 +161,13 @@ impl WhisperApp {
             azure_mai_model: Arc::new(Mutex::new(azure_mai_model)),
             azure_mai_api_version: Arc::new(Mutex::new(azure_mai_api_version)),
             azure_mai_definition: Arc::new(Mutex::new(azure_mai_definition)),
+            tts_enabled: Arc::new(Mutex::new(tts_enabled)),
+            tts_voice: Arc::new(Mutex::new(tts_voice)),
+            gemini_api_key: Arc::new(Mutex::new(gemini_api_key)),
+            tts_scene: Arc::new(Mutex::new(tts_scene)),
+            tts_sample_context: Arc::new(Mutex::new(tts_sample_context)),
+            tts_formatter_enabled: Arc::new(Mutex::new(tts_formatter_enabled)),
+            tts_formatter_prompt: Arc::new(Mutex::new(tts_formatter_prompt)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -449,6 +471,28 @@ impl WhisperApp {
             definition,
         );
 
+        // TTS
+        *self.tts_enabled.lock().unwrap() = v.tts_enabled;
+        self.db.set("tts_enabled", if v.tts_enabled { "true" } else { "false" });
+        *self.tts_voice.lock().unwrap() = v.tts_voice.clone();
+        self.db.set("tts_voice", &v.tts_voice);
+        *self.gemini_api_key.lock().unwrap() = v.gemini_api_key.clone();
+        self.db.set("gemini_api_key", &v.gemini_api_key);
+        *self.tts_scene.lock().unwrap() = v.tts_scene.clone();
+        self.db.set("tts_scene", &v.tts_scene);
+        *self.tts_sample_context.lock().unwrap() = v.tts_sample_context.clone();
+        self.db.set("tts_sample_context", &v.tts_sample_context);
+        *self.tts_formatter_enabled.lock().unwrap() = v.tts_formatter_enabled;
+        self.db.set("tts_formatter_enabled", if v.tts_formatter_enabled { "true" } else { "false" });
+        *self.tts_formatter_prompt.lock().unwrap() = v.tts_formatter_prompt.clone();
+        self.db.set("tts_formatter_prompt", &v.tts_formatter_prompt);
+        log::info!(
+            "TTS: {} voz={} gemini_key={}",
+            if v.tts_enabled { "activo" } else { "inactivo" },
+            v.tts_voice,
+            if v.gemini_api_key.is_empty() { "vacía" } else { "configurada" },
+        );
+
         log::info!("Configuración aplicada");
     }
 }
@@ -507,6 +551,13 @@ impl ApplicationHandler for WhisperApp {
                     azure_mai_model: self.azure_mai_model.lock().unwrap().clone(),
                     azure_mai_api_version: self.azure_mai_api_version.lock().unwrap().clone(),
                     azure_mai_definition: self.azure_mai_definition.lock().unwrap().clone(),
+                    tts_enabled: *self.tts_enabled.lock().unwrap(),
+                    tts_voice: self.tts_voice.lock().unwrap().clone(),
+                    gemini_api_key: self.gemini_api_key.lock().unwrap().clone(),
+                    tts_scene: self.tts_scene.lock().unwrap().clone(),
+                    tts_sample_context: self.tts_sample_context.lock().unwrap().clone(),
+                    tts_formatter_enabled: *self.tts_formatter_enabled.lock().unwrap(),
+                    tts_formatter_prompt: self.tts_formatter_prompt.lock().unwrap().clone(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))

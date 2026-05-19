@@ -3699,6 +3699,7 @@ name = "whisper-bar-rust"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "base64",
  "cpal",
  "enigo",
  "global-hotkey",

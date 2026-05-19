@@ -3,6 +3,18 @@ name = "whisper-bar-rust"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "whisper_bar_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "whisper-bar-rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "whisper-tts"
+path = "src/bin/whisper-tts.rs"
+
 [dependencies]
 tray-icon = "0.21.3"
 
@@ -34,3 +46,4 @@ simplelog = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["blocking", "multipart"] }
 serde_json = "1"
+base64 = "0.22"

@@ -54,6 +54,40 @@ pub const GRAMMAR_PROMPT_ES: &str =
     "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
 
 
+/// Voz Gemini por defecto para síntesis TTS
+pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
+
+/// Descripción de escena por defecto para el director's note de Gemini TTS
+pub const TTS_DEFAULT_SCENE: &str =
+    "A highly natural female AI assistant speaking fluent Latin American Spanish \
+     and English naturally. She sounds warm, intelligent, calm, conversational, \
+     and human-like. Maintain smooth pacing, realistic pauses, subtle emotional \
+     nuance, and clear pronunciation in both Spanish and English. Never sound \
+     robotic, overly excited, or exaggerated.";
+
+/// Contexto de muestra por defecto para el director's note de Gemini TTS
+pub const TTS_DEFAULT_SAMPLE_CONTEXT: &str =
+    "The assistant is having a real-time voice conversation with a user. \
+     Responses should feel fluid, natural, concise, friendly, and emotionally \
+     subtle in both English and Spanish. Maintain conversational rhythm with \
+     realistic pauses and natural transitions between languages when needed.";
+
+/// Modelo Gemini para formatear respuestas antes de TTS
+pub const GEMINI_FORMATTER_MODEL: &str = "gemini-3.1-flash-lite";
+
+/// Prompt por defecto para el formateador TTS (convierte respuestas AI a prosa natural)
+pub const FORMATTER_DEFAULT_PROMPT: &str =
+    "Tu tarea es adaptar la respuesta de un asistente de IA para que sea natural al escucharla en voz alta.\n\n\
+     Reglas:\n\
+     1. Elimina todo el código fuente. Si hay código, menciona en una frase qué hace.\n\
+     2. Quita el formato markdown: asteriscos, backticks, encabezados, guiones de lista.\n\
+     3. Convierte listas en oraciones fluidas conectadas con \"y\", \"además\" o \"también\".\n\
+     4. Sé conciso: máximo 4 oraciones para respuestas cortas, 8 para respuestas largas.\n\
+     5. Conserva advertencias críticas, errores y próximos pasos importantes.\n\
+     6. Usa el idioma predominante en la respuesta (español o inglés).\n\
+     7. Tono conversacional directo, sin frases como \"Aquí está:\" o \"En resumen:\".\n\
+     8. Responde ÚNICAMENTE con el texto listo para ser leído. Nada más.";
+
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)
