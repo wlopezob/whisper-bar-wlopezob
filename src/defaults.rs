@@ -54,6 +54,12 @@ pub const GRAMMAR_PROMPT_ES: &str =
     "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
 
 
+/// Subcarpeta de audio dentro de APP_CONFIG_DIR — guarda last-tts.wav
+pub const TTS_AUDIO_DIR: &str = "audio";
+
+/// Nombre del archivo de la última respuesta TTS (repetir con ⌘⌥R)
+pub const TTS_LAST_AUDIO_FILE: &str = "last-tts.wav";
+
 /// Voz Gemini por defecto para síntesis TTS
 pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
 

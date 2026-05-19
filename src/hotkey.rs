@@ -7,44 +7,52 @@ use global_hotkey::{
 
 pub struct HotkeyHandler {
     manager: GlobalHotKeyManager,
-    hotkey: HotKey,
-    hotkey_id: u32,
+    hotkey_record: HotKey,
+    hotkey_replay: HotKey,
+    record_id: u32,
+    replay_id: u32,
 }
 
 impl HotkeyHandler {
-    /// Registra el hotkey ⌘⌥W (Cmd+Option+W) para iniciar/detener grabación
-    /// Requiere permiso de Accesibilidad en System Settings
+    /// Registra ⌘⌥W (grabar/transcribir) y ⌘⌥R (repetir última respuesta TTS)
     pub fn new() -> Result<Self, String> {
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| format!("Error creando hotkey manager: {}", e))?;
 
-        // ⌘⌥W — Cmd+Option+W para grabar / detener
-        let hotkey = HotKey::new(
-            Some(Modifiers::META | Modifiers::ALT),
-            Code::KeyW,
-        );
+        let hotkey_record = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyW);
+        let hotkey_replay = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyR);
 
-        let hotkey_id = hotkey.id();
+        let record_id = hotkey_record.id();
+        let replay_id = hotkey_replay.id();
 
         manager
-            .register(hotkey)
+            .register(hotkey_record)
             .map_err(|e| format!("Error registrando ⌘⌥W: {}", e))?;
+        manager
+            .register(hotkey_replay)
+            .map_err(|e| format!("Error registrando ⌘⌥R: {}", e))?;
 
         Ok(HotkeyHandler {
             manager,
-            hotkey,
-            hotkey_id,
+            hotkey_record,
+            hotkey_replay,
+            record_id,
+            replay_id,
         })
     }
 
-    /// ID del hotkey registrado — usar para comparar eventos en el event loop
     pub fn hotkey_id(&self) -> u32 {
-        self.hotkey_id
+        self.record_id
+    }
+
+    pub fn replay_hotkey_id(&self) -> u32 {
+        self.replay_id
     }
 }
 
 impl Drop for HotkeyHandler {
     fn drop(&mut self) {
-        let _ = self.manager.unregister(self.hotkey);
+        let _ = self.manager.unregister(self.hotkey_record);
+        let _ = self.manager.unregister(self.hotkey_replay);
     }
 }

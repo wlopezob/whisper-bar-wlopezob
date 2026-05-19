@@ -12,6 +12,7 @@ use say::SayProvider;
 use std::time::Duration;
 
 const PID_FILE: &str = "/tmp/whisper-tts.pid";
+const AFPLAY_PID_FILE: &str = "/tmp/whisper-tts-afplay.pid";
 
 // ── Limpieza de markdown ──────────────────────────────────────────────────────
 
@@ -62,6 +63,33 @@ pub fn cleanup_pid_file() {
     let _ = std::fs::remove_file(PID_FILE);
 }
 
+/// Devuelve true si afplay está corriendo actualmente (PID file existe y el proceso vive)
+pub fn is_afplay_running() -> bool {
+    if let Ok(pid_str) = std::fs::read_to_string(AFPLAY_PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            // kill -0 verifica si el proceso existe sin matarlo
+            return std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
+    }
+    false
+}
+
+/// Para cualquier reproducción de afplay en curso
+pub fn kill_afplay() {
+    if let Ok(pid_str) = std::fs::read_to_string(AFPLAY_PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let _ = std::process::Command::new("kill")
+                .args(["-15", &pid.to_string()])
+                .status();
+        }
+    }
+    let _ = std::fs::remove_file(AFPLAY_PID_FILE);
+}
+
 // ── Síntesis principal ────────────────────────────────────────────────────────
 
 pub fn speak(text: &str, config: &TtsConfig) {
@@ -97,16 +125,42 @@ pub fn speak(text: &str, config: &TtsConfig) {
     }
 }
 
+pub fn last_audio_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(crate::defaults::APP_CONFIG_DIR)
+            .join(crate::defaults::TTS_AUDIO_DIR)
+            .join(crate::defaults::TTS_LAST_AUDIO_FILE),
+    )
+}
+
 fn play_audio_file(audio: AudioData) {
     let tmp = format!("/tmp/whisper-tts-audio.{}", audio.ext);
-    if std::fs::write(&tmp, &audio.bytes).is_ok() {
-        let status = std::process::Command::new("afplay").arg(&tmp).status();
-        let _ = std::fs::remove_file(&tmp);
-        match status {
-            Ok(_) => log::info!("TTS: audio reproducido correctamente"),
-            Err(e) => log::error!("TTS: error en afplay: {}", e),
-        }
-    } else {
+    if std::fs::write(&tmp, &audio.bytes).is_err() {
         log::error!("TTS: no se pudo escribir archivo temporal de audio");
+        return;
     }
+
+    // Persistir como última respuesta para poder repetirla con ⌘⌥R
+    if let Some(last) = last_audio_path() {
+        if let Some(dir) = last.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::copy(&tmp, &last).is_ok() {
+            log::info!("TTS: audio guardado en {:?}", last);
+        }
+    }
+
+    // spawn() en vez de status() para obtener el PID y permitir kill externo
+    match std::process::Command::new("afplay").arg(&tmp).spawn() {
+        Ok(mut child) => {
+            let _ = std::fs::write(AFPLAY_PID_FILE, child.id().to_string());
+            let _ = child.wait();
+            let _ = std::fs::remove_file(AFPLAY_PID_FILE);
+            log::info!("TTS: audio reproducido correctamente");
+        }
+        Err(e) => log::error!("TTS: error en afplay: {}", e),
+    }
+    let _ = std::fs::remove_file(&tmp);
 }

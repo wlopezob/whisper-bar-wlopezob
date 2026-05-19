@@ -2,7 +2,7 @@
 
 use whisper_bar_rust::{
     azure_transcriber, config, db, defaults, hotkey, llm,
-    logger, recorder, transcriber,
+    logger, recorder, transcriber, tts,
 };
 use whisper_bar_rust::settings_window::{SettingsValues, show_settings_modal};
 
@@ -82,6 +82,7 @@ struct WhisperApp {
     llm_model_items: Vec<(tray_icon::menu::MenuItem, String)>,
     _hotkey_handler: Option<HotkeyHandler>,
     hotkey_id: Option<u32>,
+    replay_hotkey_id: Option<u32>,
 }
 
 impl WhisperApp {
@@ -181,6 +182,7 @@ impl WhisperApp {
             llm_model_items: Vec::new(),
             _hotkey_handler: None,
             hotkey_id: None,
+            replay_hotkey_id: None,
         }
     }
 
@@ -193,7 +195,7 @@ impl WhisperApp {
         let menu = Menu::new();
 
         let title_item = MenuItem::new("whisperwlopezob", false, None);
-        let hint_item = MenuItem::new("Mantén ⌘⌥W para grabar / suelta para transcribir", false, None);
+        let hint_item = MenuItem::new("Mantén ⌘⌥W para grabar / suelta para transcribir  ·  ⌘⌥R reproducir o parar última respuesta", false, None);
 
         let cli_label = if self.config.is_whisper_cli_valid() {
             format!("✅ whisper-cli: {}", self.config.whisper_cli_path)
@@ -323,7 +325,7 @@ impl WhisperApp {
         match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_title("🎙")
-            .with_tooltip("whisperwlopezob — ⌘⌥W para grabar")
+            .with_tooltip("whisperwlopezob — ⌘⌥W grabar · ⌘⌥R reproducir/parar")
             .build()
         {
             Ok(tray) => {
@@ -345,9 +347,12 @@ impl WhisperApp {
         match HotkeyHandler::new() {
             Ok(h) => {
                 let id = h.hotkey_id();
+                let replay_id = h.replay_hotkey_id();
                 log::info!("hotkey: ✅ ⌘⌥W registrado (id={})", id);
+                log::info!("hotkey: ✅ ⌘⌥R registrado (id={})", replay_id);
                 self._hotkey_handler = Some(h);
                 self.hotkey_id = Some(id);
+                self.replay_hotkey_id = Some(replay_id);
             }
             Err(e) => {
                 log::error!("hotkey: ❌ {}", e);
@@ -363,7 +368,7 @@ impl WhisperApp {
             log::error!("→ System Settings → Privacy & Security → Accessibility → activa whisperwlopezob");
         }
 
-        log::info!("whisperwlopezob activo. Mantén ⌘⌥W para grabar, suelta para transcribir.");
+        log::info!("whisperwlopezob activo. Mantén ⌘⌥W para grabar, suelta para transcribir. ⌘⌥R repite la última respuesta TTS.");
         log::info!("Log en tiempo real: tail -f {}", logger::log_path());
 
         // Solicitar permiso de micrófono al arrancar (antes del primer uso)
@@ -601,6 +606,10 @@ impl ApplicationHandler for WhisperApp {
                         &self.azure_mai_definition,
                     ),
                 }
+            } else if Some(event.id) == self.replay_hotkey_id
+                && event.state == HotKeyState::Pressed
+            {
+                replay_last_tts();
             }
         }
 
@@ -645,6 +654,33 @@ fn is_accessibility_trusted() -> bool {
         fn AXIsProcessTrusted() -> bool;
     }
     unsafe { AXIsProcessTrusted() }
+}
+
+/// ⌘⌥R: toggle — para si hay audio reproduciéndose, inicia replay si no hay nada
+fn replay_last_tts() {
+    if tts::is_afplay_running() {
+        log::info!("TTS replay: parando reproducción en curso");
+        tts::kill_afplay();
+        return;
+    }
+
+    // Parar también cualquier instancia de whisper-tts del hook antes de reproducir
+    tts::kill_previous_instance();
+
+    match tts::last_audio_path() {
+        Some(path) if path.exists() => {
+            log::info!("TTS replay: reproduciendo {:?}", path);
+            std::thread::spawn(move || {
+                // Reutilizar play_audio_file indirectamente via afplay con PID tracking
+                if let Ok(mut child) = std::process::Command::new("afplay").arg(&path).spawn() {
+                    let _ = std::fs::write("/tmp/whisper-tts-afplay.pid", child.id().to_string());
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file("/tmp/whisper-tts-afplay.pid");
+                }
+            });
+        }
+        _ => log::info!("TTS replay: no hay audio previo para reproducir"),
+    }
 }
 
 /// Pressed: inicia grabación si está en reposo

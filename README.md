@@ -1,8 +1,10 @@
 # whisperwlopezob
 
-App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con `whisper-cli` y pega el texto donde está el cursor. Opcionalmente corrige gramática con un LLM local y/o traduce el resultado al idioma destino configurado.
+App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` (o Azure MAI) y pega el texto donde está el cursor. Lee en voz alta las respuestas de Claude Code / Codex usando Gemini TTS.
 
-**Hotkey:** `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar.
+**Hotkeys:**
+- `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar
+- `⌘⌥R` — reproduce la última respuesta TTS; si ya está reproduciéndose, la para
 
 ---
 
@@ -17,16 +19,16 @@ App de barra de menú para macOS que graba tu voz con un hotkey, transcribe con 
 
 ## Estructura de datos
 
-Todo vive bajo un único directorio:
-
 ```
 ~/.config/whisperwlopezob/
-├── whisperwlopezob.log     # log de la app (se trunca al iniciar)
+├── whisperwlopezob.log     # log de la app
 ├── data.db                 # configuración persistente (SQLite)
 ├── whisper-models/         # modelos de Whisper (.bin)
 │   └── ggml-large-v3.bin
-└── llm/                    # modelos LLM para corrección y traducción (.gguf)
-    └── qwen2.5-1.5b-instruct-q4_k_m.gguf
+├── llm/                    # modelos LLM para corrección y traducción (.gguf)
+│   └── qwen2.5-1.5b-instruct-q4_k_m.gguf
+└── audio/
+    └── last-tts.wav        # última respuesta TTS (reproducir con ⌘⌥R)
 ```
 
 ---
@@ -58,83 +60,45 @@ source ~/.cargo/env
 brew install whisper-cpp
 ```
 
-Verifica que esté disponible:
-
-```bash
-which whisper-cli
-# /opt/homebrew/bin/whisper-cli  (Apple Silicon)
-# /usr/local/bin/whisper-cli     (Intel)
-```
-
 ### 5. Descargar un modelo de Whisper
-
-Crea el directorio y descarga el modelo:
 
 ```bash
 mkdir -p ~/.config/whisperwlopezob/whisper-models
-```
 
-Elige uno según tu hardware:
-
-```bash
-# Recomendado para Apple Silicon — buena precisión y velocidad
+# Recomendado para Apple Silicon
 curl -L -o ~/.config/whisperwlopezob/whisper-models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
-
-# Más rápido — menor precisión
-curl -L -o ~/.config/whisperwlopezob/whisper-models/ggml-base.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-
-# Máxima precisión — más lento
-curl -L -o ~/.config/whisperwlopezob/whisper-models/ggml-large-v3.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 ```
 
-> La app detecta automáticamente el mejor modelo disponible con esta prioridad: `large-v3 → large-v2 → medium → small → base → tiny`
+> La app detecta automáticamente el mejor modelo disponible: `large-v3 → large-v2 → medium → small → base → tiny`
 
 ### 6. (Opcional) Corrección gramatical y traducción con LLM local
-
-Para corregir automáticamente errores de gramática o traducir después de transcribir:
 
 ```bash
 brew install llama.cpp
 mkdir -p ~/.config/whisperwlopezob/llm
 
-# Modelo recomendado (~1GB, <2s en Apple Silicon)
 curl -L -o ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
   https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
 ```
 
-> Puedes colocar múltiples modelos `.gguf` en `~/.config/whisperwlopezob/llm/`. Todos aparecerán en la ventana de configuración para seleccionar.
+### 7. (Opcional) Lectura de respuestas con Gemini TTS
 
-#### Probar `llama-completion` directamente en consola
+Requiere una API key de Google Gemini. Configurable desde **Configuración → Lectura de respuestas**.
 
-Este comando replica el flujo que usa la app (prompt de sistema + entrada de usuario):
+Para que las respuestas de Claude Code / Codex se lean automáticamente al terminar cada respuesta, instala el hook:
 
 ```bash
-llama-completion \
-  -m ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
-  -sys "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words." \
-  -p "Could you help me send a message for Mama?" \
-  -n 128 -ngl 99 \
-  > /tmp/llm_out.txt 2> /tmp/llm_err.txt
-
-# Texto generado (incluye bloque assistant)
-cat /tmp/llm_out.txt
-
-# Logs técnicos del motor (carga de modelo, performance, etc.)
-head -n 40 /tmp/llm_err.txt
+bash bundle.sh   # instala también el hook de Claude Code y Codex
 ```
 
-### 7. Compilar e instalar como .app
+### 8. Compilar e instalar como .app
 
 ```bash
 git clone <url-del-repositorio>
-cd whisper-bar-rust
+cd whisper-bar-wlopezob
 bash bundle.sh
 ```
-
-La primera ejecución pedirá contraseña para crear `/Applications/whisperwlopezob.app`. Las siguientes no requieren `sudo`.
 
 ---
 
@@ -142,22 +106,18 @@ La primera ejecución pedirá contraseña para crear `/Applications/whisperwlope
 
 ### Accesibilidad (obligatorio)
 
-Requerido para:
-- Registrar el hotkey global `⌘⌥W`
-- Simular `⌘V` para pegar el texto
-
-Pasos:
+Requerido para registrar `⌘⌥W` / `⌘⌥R` y simular `⌘V` para pegar.
 
 1. Ejecuta la app: `open /Applications/whisperwlopezob.app`
 2. Ve a **System Settings → Privacy & Security → Accessibility**
 3. Activa el toggle de **whisperwlopezob**
 4. Reinicia: `pkill whisperwlopezob; open /Applications/whisperwlopezob.app`
 
-> **Importante:** cada rebuild revoca el permiso de Accessibility (el hash del binario cambia). Debes desactivar y reactivar el toggle tras cada `bash bundle.sh`.
+> **Importante:** cada rebuild revoca el permiso. Desactiva y reactiva el toggle tras cada `bash bundle.sh`.
 
 ### Micrófono
 
-La app solicita el permiso de micrófono automáticamente **500ms después de arrancar** (antes de la primera grabación). Si fue denegado:
+La app solicita el permiso automáticamente al arrancar. Si fue denegado:
 
 **System Settings → Privacy & Security → Microphone** → activa **whisperwlopezob**
 
@@ -166,17 +126,10 @@ La app solicita el permiso de micrófono automáticamente **500ms después de ar
 ## Ejecución
 
 ```bash
-# Compilar e instalar (primera vez o tras cambios)
-bash bundle.sh
-
-# Lanzar
-open /Applications/whisperwlopezob.app
-
-# Relanzar tras cambios
-pkill whisperwlopezob; open /Applications/whisperwlopezob.app
-
-# Ver log en tiempo real
-tail -f ~/.config/whisperwlopezob/whisperwlopezob.log
+bash bundle.sh                                          # compilar e instalar
+open /Applications/whisperwlopezob.app                 # lanzar
+pkill whisperwlopezob; open /Applications/whisperwlopezob.app  # relanzar
+tail -f ~/.config/whisperwlopezob/whisperwlopezob.log  # ver log
 ```
 
 ---
@@ -186,8 +139,9 @@ tail -f ~/.config/whisperwlopezob/whisperwlopezob.log
 | Acción | Resultado |
 |--------|-----------|
 | Mantener `⌘⌥W` | Inicia grabación — icono cambia a `🔴` |
-| Soltar `⌘⌥W` | Detiene grabación — icono cambia a `⏳` |
-| Transcripción completa | Texto pegado donde está el cursor — icono vuelve a `🎙` |
+| Soltar `⌘⌥W` | Detiene grabación — icono `⏳` — transcribe y pega |
+| Presionar `⌘⌥R` (sin audio) | Reproduce la última respuesta TTS |
+| Presionar `⌘⌥R` (con audio) | Para la reproducción en curso |
 
 El clipboard original se restaura automáticamente 300ms después de pegar.
 
@@ -195,182 +149,198 @@ El clipboard original se restaura automáticamente 300ms después de pegar.
 
 ```
 whisperwlopezob
-─────────────────────────────────────────
-Mantén ⌘⌥W para grabar / suelta para transcribir
-─────────────────────────────────────────
+─────────────────────────────────────────────────────────────
+Mantén ⌘⌥W para grabar / suelta para transcribir  ·  ⌘⌥R reproducir o parar última respuesta
+─────────────────────────────────────────────────────────────
 ✅ whisper-cli: /opt/homebrew/bin/whisper-cli
 ✅ Modelo: ggml-large-v3.bin
-─────────────────────────────────────────
+─────────────────────────────────────────────────────────────
 Idioma
   ✓ Español
     English
-─────────────────────────────────────────
-✅ llama-cli: /opt/homebrew/bin/llama-completion
-Modelo LLM:
-  ✓ qwen2.5-1.5b-instruct-q4_k_m.gguf
-☐ Mejorar gramática
-─────────────────────────────────────────
+─────────────────────────────────────────────────────────────
 Configuración...
-─────────────────────────────────────────
-Log: ~/.config/whisperwlopezob/whisperwlopezob.log
+─────────────────────────────────────────────────────────────
 Ver log
-─────────────────────────────────────────
 Salir
 ```
-
-- **Idioma** — muestra el idioma de transcripción activo (solo lectura, cámbialo en Configuración).
-- **Modelo LLM** — muestra el modelo activo con checkmark (solo lectura, cámbialo en Configuración).
-- **Mejorar gramática** — muestra si la corrección gramatical está activa (solo lectura).
-- **Configuración...** — abre la ventana nativa de configuración.
-- **Ver log** — abre el log en el editor de texto por defecto.
 
 ---
 
 ## Ventana de configuración
 
-Al hacer clic en **Configuración...** se abre un panel nativo macOS (NSPanel modal) con tres secciones:
+Panel nativo macOS con scroll vertical que agrupa todas las opciones:
 
+### Lectura de respuestas (TTS)
+
+| Campo | Descripción |
+|-------|-------------|
+| Activar lectura | Habilita la síntesis de voz con Gemini TTS |
+| Gemini API Key | Clave de Google Gemini |
+| Voz | Nombre de voz Gemini (default: `Sulafat`) |
+| Scene | Descripción del estilo de narración |
+| Sample Context | Contexto de la conversación para el director's note |
+
+**Formatear respuesta para voz** — si está activo, antes de sintetizar la respuesta pasa por `gemini-3.1-flash-lite` que la convierte a prosa natural (elimina código, markdown, listas). El prompt es configurable.
+
+### Transcripción
+
+- **Backend**: local (whisper-cli) o Azure MAI Transcribe
+- Para Azure MAI: API Key, Region, API Version, Definition JSON
+
+### Mejora gramatical
+
+- Corrección automática con LLM local tras transcribir
+- Prompt configurable por idioma (español / inglés)
+
+### Traducción
+
+- Traduce el texto transcrito al idioma destino configurado
+
+---
+
+## Lectura automática de respuestas (Stop Hook)
+
+Al terminar cada respuesta, Claude Code / Codex ejecuta automáticamente `whisper-tts` que:
+
+1. Extrae el último par usuario/asistente del transcript
+2. (Opcional) Formatea la respuesta con `gemini-3.1-flash-lite` para que suene natural
+3. Sintetiza con Gemini TTS (`gemini-3.1-flash-tts-preview`)
+4. Reproduce el audio con `afplay`
+5. Guarda el audio en `~/.config/whisperwlopezob/audio/last-tts.wav`
+
+### Hook para Claude Code
+
+Instalado automáticamente por `bundle.sh` en `~/.claude/hooks/whisper-tts-stop.sh`.
+
+Config en `~/.claude/settings.json`:
+```json
+{
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/whisper-tts-stop.sh", "async": true }] }]
+  }
+}
 ```
-┌──────────────────────────────────────────┐
-│  Configuración                     [X]  │
-├──────────────────────────────────────────┤
-│  TRANSCRIPCIÓN                           │
-│  Idioma:  (●) Español   (○) English     │
-│                                          │
-│  MEJORA GRAMATICAL                       │
-│  [☐] Activar mejora gramatical          │
-│  Modelo: [▼ — seleccionar modelo —  ]   │
-│                                          │
-│  TRADUCCIÓN                              │
-│  [☐] Activar traducción                 │
-│  Idioma destino: [▼ Español         ]   │
-│                                          │
-│               [Cancelar]   [Aplicar]    │
-└──────────────────────────────────────────┘
+
+### Hook para Codex Desktop
+
+Instalado automáticamente por `bundle.sh` en `~/.codex/hooks/whisper-tts-stop.sh`.
+
+Config en `~/.codex/hooks.json`:
+```json
+{
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "command": "/Users/<user>/.codex/hooks/whisper-tts-stop.sh", "timeout": 30 }] }]
+  }
+}
 ```
 
-**TRANSCRIPCIÓN**
-- Selecciona el idioma de transcripción: Español (`es`) o English (`en`).
+### Prueba manual del hook
 
-**MEJORA GRAMATICAL**
-- Activa o desactiva la corrección automática de gramática y pronunciación usando el LLM local.
-- Selecciona el modelo `.gguf` a usar. Si no hay modelo seleccionado (muestra `— seleccionar modelo —`), la corrección no se aplica aunque el toggle esté activo.
-- El prompt de corrección se ajusta automáticamente al idioma de transcripción.
+```bash
+echo '{"user": "raíz cuadrada de 144", "assistant": "La raíz cuadrada de 144 es 12."}' \
+  | ~/.local/bin/whisper-tts
 
-**TRADUCCIÓN**
-- Activa o desactiva la traducción del texto transcrito (y corregido) al idioma destino.
-- Solo se traduce si el idioma destino es diferente al idioma de transcripción.
-- Requiere que un modelo LLM esté seleccionado.
-
-Pulsar **Aplicar** guarda todos los cambios en la base de datos y actualiza el tray. Pulsar **Cancelar** o cerrar la ventana descarta los cambios.
-
----
-
-## Corrección gramatical
-
-Cuando **Mejorar gramática** está activo y hay un modelo seleccionado, después de transcribir el audio el texto pasa por el CLI LLM con un prompt de sistema que varía según el idioma:
-
-- **Español:** _"Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido."_
-- **English:** _"Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words."_
-
-Si el LLM falla o supera 30 segundos, se pega la transcripción original sin interrupción.
-
-Útil para aprender inglés: habla aunque cometas errores — el texto que se pega siempre será correcto.
-
----
-
-## Traducción
-
-Cuando **Traducción** está activa y el idioma destino es distinto al idioma de transcripción, el texto (ya corregido si corresponde) pasa por el LLM con un prompt de traducción:
-
-- **Destino Español:** _"Translate the following text to Spanish. Return ONLY the Spanish translation."_
-- **Destino English:** _"Traduce el siguiente texto al inglés. Devuelve ÚNICAMENTE la traducción en inglés."_
-
-Si la traducción falla o supera 30 segundos, se pega el texto sin traducir.
-
----
-
-## Solución de problemas
-
-**El icono no aparece en la barra de menú**
-- Asegúrate de ejecutar la app desde una sesión con interfaz gráfica (no SSH)
-
-**`❌ whisper-cli no encontrado`**
-- `brew install whisper-cpp`
-
-**`❌ Modelo no encontrado`**
-- Verifica que existe algún archivo `ggml-*.bin` en `~/.config/whisperwlopezob/whisper-models/`
-
-**`❌ llama-cli no encontrado`**
-- `brew install llama.cpp`
-- Verifica si existe `llama-completion`: `which llama-completion`
-
-**Sin modelos en `~/.config/whisperwlopezob/llm/`**
-- Descarga un modelo `.gguf` en esa carpeta (ver paso 6)
-
-**El hotkey `⌘⌥W` no responde**
-- Habilita Accesibilidad: System Settings → Privacy & Security → Accessibility
-- Si recompilaste, desactiva y reactiva el toggle
-
-**El texto no se pega**
-- Habilita Accesibilidad (necesario para simular `⌘V`)
-- Asegúrate de que el cursor esté en un campo de texto
-
-**Mejora gramatical no se aplica aunque esté activada**
-- Abre Configuración... y selecciona un modelo LLM en el desplegable (si aparece `— seleccionar modelo —` no hay modelo activo)
-
-**La traducción no se aplica**
-- Verifica que el idioma destino sea diferente al idioma de transcripción
-- Verifica que haya un modelo LLM seleccionado en Configuración...
-
-**La transcripción tarda mucho**
-- Usa un modelo más pequeño (`ggml-base.bin` o `ggml-tiny.bin`)
-- Timeout máximo: 60 segundos
-
-**La corrección LLM o traducción tarda mucho**
-- Usa un modelo más pequeño o desactiva las opciones en Configuración...
-- Timeout máximo: 30 segundos por operación (usa el texto previo como fallback)
+tail -20 ~/.config/whisperwlopezob/whisperwlopezob.log
+```
 
 ---
 
 ## Arquitectura
 
 ```
-main.rs           — Event loop (winit), tray icon, coordinador principal
-config.rs         — Auto-detección de whisper-cli, CLI LLM y modelos
-defaults.rs       — Constantes y valores por defecto (fuente única de verdad)
-recorder.rs       — Grabación de audio (cpal + hound, 16kHz mono PCM)
-transcriber.rs    — Invocación de whisper-cli con timeout de 60s
-llm.rs            — Corrección gramatical y traducción con CLI LLM (timeout 30s)
-hotkey.rs         — Registro del hotkey global ⌘⌥W
-db.rs             — Persistencia de configuración (SQLite, tabla settings clave-valor)
-logger.rs         — Log dual: consola + archivo (auto-recreado si se elimina)
-settings_window.rs — Ventana nativa de configuración (NSPanel modal vía objc2)
+src/
+├── main.rs              — Event loop (winit), tray icon, coordinador principal
+├── lib.rs               — Declaración de módulos
+├── config.rs            — Auto-detección de whisper-cli, CLI LLM y modelos
+├── defaults.rs          — Constantes y valores por defecto
+├── hotkey.rs            — Hotkeys globales: ⌘⌥W (grabar) y ⌘⌥R (repetir TTS)
+├── recorder.rs          — Grabación de audio (cpal + hound, 16kHz mono PCM)
+├── transcriber.rs       — Invocación de whisper-cli con timeout 60s
+├── azure_transcriber.rs — Backend Azure MAI Transcribe
+├── llm.rs               — Corrección gramatical y traducción con CLI LLM
+├── formatter.rs         — Formateador Gemini Flash Lite para TTS
+├── tts/
+│   ├── mod.rs           — Orquestador TTS, PID management, replay path
+│   ├── gemini.rs        — Síntesis con gemini-3.1-flash-tts-preview (PCM→WAV)
+│   ├── say.rs           — Fallback: say -v Paulina
+│   └── provider.rs      — Trait TtsProvider + structs AudioData, TtsConfig
+├── db.rs                — Persistencia SQLite (tabla settings clave-valor)
+├── logger.rs            — Log dual: consola + archivo
+└── settings_window.rs   — Ventana nativa macOS (NSPanel modal, scrollable)
+
+src/bin/
+└── whisper-tts.rs       — Binario CLI para el Stop hook
 ```
 
-**Flujo completo:**
+**Flujo de transcripción:**
 
 ```
-⌘⌥W (hold)
-  └─▶ Recorder::start()              — CoreAudio captura audio
-⌘⌥W (release)
-  └─▶ Recorder::stop()               — Escribe WAV en /tmp/
-  └─▶ transcriber::transcribe()      — Ejecuta whisper-cli en thread separado
-  └─▶ [llm::correct_grammar()]       — Si "Mejorar gramática" activo y modelo seleccionado
-  └─▶ [llm::translate_text()]        — Si "Traducción" activa y destino ≠ origen
-  └─▶ paste_text()
-        ├─ Guarda clipboard actual
-        ├─ Escribe texto al clipboard
-        ├─ Simula ⌘V (enigo)
-        └─ Restaura clipboard original tras 300ms
+⌘⌥W (hold) → Recorder::start()
+⌘⌥W (release) → Recorder::stop() → WAV en /tmp/
+  └─▶ transcriber::transcribe()    (whisper-cli local)
+   OR azure_transcriber::transcribe() (Azure MAI)
+  └─▶ [llm::correct_grammar()]     si activo
+  └─▶ [llm::translate_text()]      si activo
+  └─▶ paste_text()                 simula ⌘V
 ```
 
-**Configuración persistente** (`~/.config/whisperwlopezob/data.db`):
+**Flujo de lectura de respuestas:**
+
+```
+Claude / Codex termina respuesta
+  └─▶ Stop hook → whisper-tts (stdin: {user, assistant})
+  └─▶ [GeminiFormatter]           si formatter activo
+  └─▶ GeminiProvider::synthesize()
+  └─▶ afplay audio.wav
+  └─▶ guarda audio/last-tts.wav   (⌘⌥R para repetir)
+```
+
+---
+
+## Configuración persistente (data.db)
 
 | Clave | Valores | Default |
 |-------|---------|---------|
 | `language` | `"es"` \| `"en"` | `"es"` |
 | `llm_enabled` | `"true"` \| `"false"` | `"false"` |
-| `llm_model` | nombre del archivo `.gguf` | `""` |
+| `llm_model` | nombre `.gguf` | `""` |
 | `translate_enabled` | `"true"` \| `"false"` | `"false"` |
 | `translate_dest_lang` | `"es"` \| `"en"` | `"es"` |
+| `azure_mai_enabled` | `"true"` \| `"false"` | `"false"` |
+| `azure_mai_key` | string | `""` |
+| `azure_mai_region` | string | `""` |
+| `tts_enabled` | `"true"` \| `"false"` | `"false"` |
+| `tts_voice` | nombre de voz Gemini | `"Sulafat"` |
+| `gemini_api_key` | string | `""` |
+| `tts_scene` | string | (descripción bilingual) |
+| `tts_sample_context` | string | (contexto conversacional) |
+| `tts_formatter_enabled` | `"true"` \| `"false"` | `"false"` |
+| `tts_formatter_prompt` | string | (8 reglas de formato) |
+
+---
+
+## Solución de problemas
+
+**El hotkey no responde**
+- Habilita Accessibility: System Settings → Privacy & Security → Accessibility
+- Si recompilaste, desactiva y reactiva el toggle
+
+**`⌘⌥R` no reproduce nada**
+- Verifica que existe `~/.config/whisperwlopezob/audio/last-tts.wav`
+- Requiere que TTS esté activado y que haya habido al menos una respuesta leída
+
+**TTS no se activa al terminar respuesta de Claude/Codex**
+- Verifica que TTS esté habilitado en Configuración
+- Verifica que haya una Gemini API Key configurada
+- Revisa el log: `tail -20 ~/.config/whisperwlopezob/whisperwlopezob.log`
+- Prueba el binario manualmente (ver sección anterior)
+
+**El texto no se pega**
+- Habilita Accessibility (necesario para simular `⌘V`)
+
+**`❌ whisper-cli no encontrado`** → `brew install whisper-cpp`
+
+**`❌ Modelo no encontrado`** → descarga un `.bin` en `~/.config/whisperwlopezob/whisper-models/`
+
+**La transcripción tarda mucho** → usa un modelo más pequeño (`ggml-base.bin`)
