@@ -112,7 +112,7 @@ impl WhisperApp {
         let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
         let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
 
-        log::info!("=== whisperwlopezob v0.1.0 ===");
+        log::info!("=== whisperwlopezob v2.0.0 ===");
         log::info!(
             "whisper-cli: {} {}",
             if config.is_whisper_cli_valid() { "✅" } else { "❌" },

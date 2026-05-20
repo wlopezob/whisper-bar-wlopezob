@@ -49,10 +49,10 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <string>${BUNDLE_ID}</string>
 
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>2.0.0</string>
 
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>2.0.0</string>
 
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
