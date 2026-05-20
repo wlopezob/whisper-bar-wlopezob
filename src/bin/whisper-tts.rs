@@ -1,12 +1,32 @@
 // src/bin/whisper-tts.rs
 // Binary CLI: recibe JSON {user, assistant} por stdin, lee config de SQLite,
-// formatea con LLM (opcional) y reproduce via Gemini TTS.
-// Flujo: {user, assistant} → [formatter LLM] → Gemini TTS → afplay
+// formatea con LLM si es necesario y reproduce via Gemini TTS.
+// Flujo: {user, assistant} → [needs_formatter?] → [formatter LLM] → Gemini TTS → afplay
 // Invocado desde el Stop hook de Claude Code (async: true).
 // Siempre termina con exit code 0.
 
 use std::io::Read;
 use whisper_bar_rust::{db, defaults, formatter, logger, tts};
+
+/// Evalúa si el texto necesita pasar por el formatter LLM antes de TTS.
+/// Retorna true si el contenido tiene elementos que suenan mal al leerlos en voz alta.
+fn needs_formatter(text: &str) -> bool {
+    let has_code_block  = text.contains("```");
+    let has_inline_code = text.contains('`');
+    let has_markdown    = text.contains("**") || text.contains("##") || text.contains("__");
+    let has_url         = text.contains("http://") || text.contains("https://");
+    let is_long         = text.len() > 400;
+
+    let has_list = text.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("- ")
+            || t.starts_with("* ")
+            || t.starts_with("• ")
+            || (t.len() > 2 && t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && t.contains(". "))
+    });
+
+    has_code_block || has_inline_code || has_markdown || has_url || is_long || has_list
+}
 
 fn main() {
     logger::init_append();
@@ -71,28 +91,33 @@ fn main() {
     let formatter_prompt  = db.get("tts_formatter_prompt",  defaults::FORMATTER_DEFAULT_PROMPT);
 
     let final_text = if formatter_enabled && !gemini_key.is_empty() {
-        log::info!(
-            "TTS formatter: enviando a {} — usuario={}c asistente={}c",
-            defaults::GEMINI_FORMATTER_MODEL,
-            user_msg.len(),
-            assistant_msg.len()
-        );
-        match (formatter::GeminiFormatter { api_key: gemini_key.clone() })
-            .format(&user_msg, &assistant_msg, &formatter_prompt)
-        {
-            Ok(formatted) => {
-                log::info!(
-                    "TTS formatter: ok ({} chars → {} chars):\n---\n{}\n---",
-                    assistant_msg.len(),
-                    formatted.len(),
-                    &formatted[..formatted.len().min(500)]
-                );
-                formatted
+        if needs_formatter(&assistant_msg) {
+            log::info!(
+                "TTS formatter: necesario — enviando a {} (usuario={}c asistente={}c)",
+                defaults::GEMINI_FORMATTER_MODEL,
+                user_msg.len(),
+                assistant_msg.len()
+            );
+            match (formatter::GeminiFormatter { api_key: gemini_key.clone() })
+                .format(&user_msg, &assistant_msg, &formatter_prompt)
+            {
+                Ok(formatted) => {
+                    log::info!(
+                        "TTS formatter: ok ({} chars → {} chars):\n---\n{}\n---",
+                        assistant_msg.len(),
+                        formatted.len(),
+                        &formatted[..formatted.len().min(500)]
+                    );
+                    formatted
+                }
+                Err(e) => {
+                    log::error!("TTS formatter: error, usando texto original — {}", e);
+                    assistant_msg.clone()
+                }
             }
-            Err(e) => {
-                log::error!("TTS formatter: error, usando texto original — {}", e);
-                assistant_msg.clone()
-            }
+        } else {
+            log::info!("TTS formatter: no necesario (texto conversacional simple), usando original");
+            assistant_msg.clone()
         }
     } else {
         if !formatter_enabled {

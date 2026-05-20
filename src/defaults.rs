@@ -83,16 +83,20 @@ pub const GEMINI_FORMATTER_MODEL: &str = "gemini-3.1-flash-lite";
 
 /// Prompt por defecto para el formateador TTS (convierte respuestas AI a prosa natural)
 pub const FORMATTER_DEFAULT_PROMPT: &str =
-    "Tu tarea es adaptar la respuesta de un asistente de IA para que sea natural al escucharla en voz alta.\n\n\
-     Reglas:\n\
-     1. Elimina todo el código fuente. Si hay código, menciona en una frase qué hace.\n\
-     2. Quita el formato markdown: asteriscos, backticks, encabezados, guiones de lista.\n\
-     3. Convierte listas en oraciones fluidas conectadas con \"y\", \"además\" o \"también\".\n\
-     4. Sé conciso: máximo 4 oraciones para respuestas cortas, 8 para respuestas largas.\n\
-     5. Conserva advertencias críticas, errores y próximos pasos importantes.\n\
-     6. Usa el idioma predominante en la respuesta (español o inglés).\n\
-     7. Tono conversacional directo, sin frases como \"Aquí está:\" o \"En resumen:\".\n\
-     8. Responde ÚNICAMENTE con el texto listo para ser leído. Nada más.";
+    "Your task: rewrite an AI assistant's response so it sounds natural when read aloud.\n\n\
+     CRITICAL — LANGUAGE RULE (read first):\n\
+     Detect the language of [Assistant response]. Output MUST be in that exact language.\n\
+     If the assistant wrote in English → your output in English.\n\
+     If the assistant wrote in Spanish → your output in Spanish.\n\
+     NEVER translate. NEVER switch languages.\n\n\
+     Rules:\n\
+     1. Remove all source code. If there is code, describe in one sentence what it does.\n\
+     2. Remove markdown formatting: asterisks, backticks, headers, list dashes.\n\
+     3. Convert lists into flowing sentences joined with \"and\", \"also\", or \"additionally\".\n\
+     4. Be concise: max 4 sentences for short responses, 8 for long ones.\n\
+     5. Keep critical warnings, errors, and important next steps.\n\
+     6. Direct conversational tone. No phrases like \"Here is:\" or \"In summary:\".\n\
+     7. Output ONLY the ready-to-speak text. Nothing else.";
 
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
