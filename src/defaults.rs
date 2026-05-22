@@ -60,6 +60,9 @@ pub const TTS_AUDIO_DIR: &str = "audio";
 /// Nombre del archivo de la última respuesta TTS (repetir con ⌘⌥R)
 pub const TTS_LAST_AUDIO_FILE: &str = "last-tts.wav";
 
+/// Nombre del archivo con el último texto TTS (ver modal con ⌘⌥V)
+pub const TTS_LAST_TEXT_FILE: &str = "last-tts-text.txt";
+
 /// Voz Gemini por defecto para síntesis TTS
 pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
 

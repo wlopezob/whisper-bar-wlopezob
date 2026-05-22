@@ -36,6 +36,7 @@ pub struct SettingsValues {
     pub tts_formatter_enabled: bool,
     pub tts_formatter_prompt: String,
     pub tts_playback_rate: String,
+    pub tts_show_modal: bool,
 }
 
 // ── Thread-local: referencias a los campos de Azure para el callback ─────────
@@ -190,10 +191,10 @@ pub fn show_settings_modal(
     scroll_settings.setHasVerticalScroller(true);
     scroll_settings.setHasHorizontalScroller(false);
 
-    // Vista de contenido de 1260px — mismos y-coords que antes
+    // Vista de contenido de 1290px — mismos y-coords que antes
     let content = NSView::initWithFrame(
         NSView::alloc(mtm),
-        rect(0.0, 0.0, 420.0, 1260.0),
+        rect(0.0, 0.0, 420.0, 1290.0),
     );
 
     // ── TRANSCRIPCIÓN ─────────────────────────────────────────────────────────
@@ -488,6 +489,23 @@ pub fn show_settings_modal(
     scroll_tts_context.setDocumentView(Some(txt_tts_context.as_ref()));
     content.addSubview(&scroll_tts_context);
 
+    // ── Mostrar texto modal (⌘⌥V) ────────────────────────────────────────────
+    let chk_show_modal = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &NSString::from_str("Mostrar texto al leer (⌘⌥V)"),
+            None,
+            None,
+            mtm,
+        )
+    };
+    chk_show_modal.setFrame(rect(20.0, 136.0, 280.0, 22.0));
+    chk_show_modal.setState(if current.tts_show_modal {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
+    content.addSubview(&chk_show_modal);
+
     // ── Formatter LLM (Gemini 3.1 Flash Lite) ────────────────────────────────
     let chk_formatter = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -497,7 +515,7 @@ pub fn show_settings_modal(
             mtm,
         )
     };
-    chk_formatter.setFrame(rect(20.0, 141.0, 280.0, 22.0));
+    chk_formatter.setFrame(rect(20.0, 106.0, 280.0, 22.0));
     chk_formatter.setState(if current.tts_formatter_enabled {
         NSControlStateValueOn
     } else {
@@ -505,10 +523,10 @@ pub fn show_settings_modal(
     });
     content.addSubview(&chk_formatter);
 
-    content.addSubview(&label("Prompt TTS:", 20.0, 118.0, 80.0, mtm));
+    content.addSubview(&label("Prompt TTS:", 20.0, 83.0, 80.0, mtm));
     let scroll_formatter_prompt = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 60.0, 380.0, 55.0),
+        rect(20.0, 25.0, 380.0, 55.0),
     );
     scroll_formatter_prompt.setHasVerticalScroller(true);
     scroll_formatter_prompt.setHasHorizontalScroller(false);
@@ -660,6 +678,7 @@ pub fn show_settings_modal(
         let v = tf_tts_rate.stringValue().to_string().trim().to_string();
         if v.parse::<f32>().is_ok() { v } else { crate::defaults::TTS_DEFAULT_PLAYBACK_RATE.to_string() }
     };
+    let tts_show_modal = chk_show_modal.state() == NSControlStateValueOn;
 
     Some(SettingsValues {
         language,
@@ -683,5 +702,6 @@ pub fn show_settings_modal(
         tts_formatter_enabled,
         tts_formatter_prompt,
         tts_playback_rate,
+        tts_show_modal,
     })
 }

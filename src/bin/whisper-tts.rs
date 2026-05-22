@@ -91,8 +91,9 @@ fn main() {
 
     let formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
     let formatter_prompt  = db.get("tts_formatter_prompt",  defaults::FORMATTER_DEFAULT_PROMPT);
+    let show_modal        = db.get("tts_show_modal", "false") == "true";
 
-    let final_text = if formatter_enabled && !gemini_key.is_empty() {
+    let (final_text, modal_title) = if formatter_enabled && !gemini_key.is_empty() {
         if needs_formatter(&assistant_msg) {
             log::info!(
                 "TTS formatter: necesario — enviando a {} (usuario={}c asistente={}c)",
@@ -110,16 +111,16 @@ fn main() {
                         formatted.len(),
                         &formatted[..formatted.len().min(500)]
                     );
-                    formatted
+                    (formatted, "TTS — Formatter activo")
                 }
                 Err(e) => {
                     log::error!("TTS formatter: error, usando texto original — {}", e);
-                    assistant_msg.clone()
+                    (assistant_msg.clone(), "TTS — Directo (error formatter)")
                 }
             }
         } else {
             log::info!("TTS formatter: no necesario (texto conversacional simple), usando original");
-            assistant_msg.clone()
+            (assistant_msg.clone(), "TTS — Directo")
         }
     } else {
         if !formatter_enabled {
@@ -127,8 +128,15 @@ fn main() {
         } else {
             log::info!("TTS formatter: sin clave Gemini, usando texto original");
         }
-        assistant_msg.clone()
+        (assistant_msg.clone(), "TTS — Directo")
     };
+
+    // Guardar texto para re-mostrar con ⌘⌥V
+    save_tts_text(modal_title, &final_text);
+
+    if show_modal {
+        show_modal_async(modal_title, &final_text);
+    }
 
     tts::kill_previous_instance();
     tts::write_pid_file();
@@ -142,4 +150,37 @@ fn main() {
     tts::cleanup_pid_file();
 
     std::process::exit(0);
+}
+
+/// Persiste el texto final en last-tts-text.txt (primera línea = título, resto = texto)
+fn save_tts_text(title: &str, text: &str) {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let dir = std::path::PathBuf::from(&home)
+        .join(defaults::APP_CONFIG_DIR)
+        .join(defaults::TTS_AUDIO_DIR);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(defaults::TTS_LAST_TEXT_FILE), format!("{}\n{}", title, text));
+}
+
+/// Muestra modal osascript en background (no bloquea el TTS)
+fn show_modal_async(title: &str, text: &str) {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let tmp = std::path::PathBuf::from(&home)
+        .join(defaults::APP_CONFIG_DIR)
+        .join("last-tts-modal.txt");
+    if std::fs::write(&tmp, text).is_err() { return; }
+    let script = format!(
+        "set t to (do shell script \"cat '{}'\")\n\
+         display dialog t with title \"{}\" buttons {{\"OK\"}} default button \"OK\"",
+        tmp.display(), title
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e").arg(&script)
+        .spawn();
 }

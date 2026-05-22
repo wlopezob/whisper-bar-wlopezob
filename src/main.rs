@@ -67,6 +67,7 @@ struct WhisperApp {
     tts_formatter_enabled: Arc<Mutex<bool>>,
     tts_formatter_prompt: Arc<Mutex<String>>,
     tts_playback_rate: Arc<Mutex<String>>,
+    tts_show_modal: Arc<Mutex<bool>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -84,6 +85,7 @@ struct WhisperApp {
     _hotkey_handler: Option<HotkeyHandler>,
     hotkey_id: Option<u32>,
     replay_hotkey_id: Option<u32>,
+    modal_hotkey_id: Option<u32>,
 }
 
 impl WhisperApp {
@@ -113,6 +115,7 @@ impl WhisperApp {
         let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
         let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
         let tts_playback_rate = db.get("tts_playback_rate", defaults::TTS_DEFAULT_PLAYBACK_RATE);
+        let tts_show_modal = db.get("tts_show_modal", "false") == "true";
 
         log::info!("=== whisperwlopezob v2.0.0 ===");
         log::info!(
@@ -172,6 +175,7 @@ impl WhisperApp {
             tts_formatter_enabled: Arc::new(Mutex::new(tts_formatter_enabled)),
             tts_formatter_prompt: Arc::new(Mutex::new(tts_formatter_prompt)),
             tts_playback_rate: Arc::new(Mutex::new(tts_playback_rate)),
+            tts_show_modal: Arc::new(Mutex::new(tts_show_modal)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -186,6 +190,7 @@ impl WhisperApp {
             _hotkey_handler: None,
             hotkey_id: None,
             replay_hotkey_id: None,
+            modal_hotkey_id: None,
         }
     }
 
@@ -351,11 +356,14 @@ impl WhisperApp {
             Ok(h) => {
                 let id = h.hotkey_id();
                 let replay_id = h.replay_hotkey_id();
+                let modal_id  = h.modal_hotkey_id();
                 log::info!("hotkey: ✅ ⌘⌥W registrado (id={})", id);
                 log::info!("hotkey: ✅ ⌘⌥R registrado (id={})", replay_id);
+                log::info!("hotkey: ✅ ⌘⌥V registrado (id={})", modal_id);
                 self._hotkey_handler = Some(h);
                 self.hotkey_id = Some(id);
                 self.replay_hotkey_id = Some(replay_id);
+                self.modal_hotkey_id = Some(modal_id);
             }
             Err(e) => {
                 log::error!("hotkey: ❌ {}", e);
@@ -496,6 +504,8 @@ impl WhisperApp {
         self.db.set("tts_formatter_prompt", &v.tts_formatter_prompt);
         *self.tts_playback_rate.lock().unwrap() = v.tts_playback_rate.clone();
         self.db.set("tts_playback_rate", &v.tts_playback_rate);
+        *self.tts_show_modal.lock().unwrap() = v.tts_show_modal;
+        self.db.set("tts_show_modal", if v.tts_show_modal { "true" } else { "false" });
         log::info!(
             "TTS: {} voz={} gemini_key={}",
             if v.tts_enabled { "activo" } else { "inactivo" },
@@ -569,6 +579,7 @@ impl ApplicationHandler for WhisperApp {
                     tts_formatter_enabled: *self.tts_formatter_enabled.lock().unwrap(),
                     tts_formatter_prompt: self.tts_formatter_prompt.lock().unwrap().clone(),
                     tts_playback_rate: self.tts_playback_rate.lock().unwrap().clone(),
+                    tts_show_modal: *self.tts_show_modal.lock().unwrap(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
@@ -615,9 +626,13 @@ impl ApplicationHandler for WhisperApp {
             } else if Some(event.id) == self.replay_hotkey_id
                 && event.state == HotKeyState::Pressed
             {
-                let rate = self.tts_playback_rate.lock().unwrap()
-                    .parse::<f32>().unwrap_or(1.0);
-                replay_last_tts(rate);
+                let rate       = self.tts_playback_rate.lock().unwrap().parse::<f32>().unwrap_or(1.0);
+                let show_modal = *self.tts_show_modal.lock().unwrap();
+                replay_last_tts(rate, show_modal);
+            } else if Some(event.id) == self.modal_hotkey_id
+                && event.state == HotKeyState::Pressed
+            {
+                show_last_tts_modal();
             }
         }
 
@@ -665,7 +680,7 @@ fn is_accessibility_trusted() -> bool {
 }
 
 /// ⌘⌥R: toggle — para si hay audio reproduciéndose, inicia replay si no hay nada
-fn replay_last_tts(rate: f32) {
+fn replay_last_tts(rate: f32, show_modal: bool) {
     if tts::is_afplay_running() {
         log::info!("TTS replay: parando afplay en curso");
         tts::kill_afplay();
@@ -675,6 +690,10 @@ fn replay_last_tts(rate: f32) {
         log::info!("TTS replay: parando say en curso (fallback)");
         tts::kill_say();
         return;
+    }
+
+    if show_modal {
+        show_last_tts_modal();
     }
 
     // Parar también cualquier instancia de whisper-tts del hook antes de reproducir
@@ -698,6 +717,47 @@ fn replay_last_tts(rate: f32) {
         }
         _ => log::info!("TTS replay: no hay audio previo para reproducir"),
     }
+}
+
+/// ⌘⌥V: muestra modal con el último texto TTS
+fn show_last_tts_modal() {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => { log::warn!("TTS modal: HOME no definido"); return; }
+    };
+    let text_path = std::path::PathBuf::from(&home)
+        .join(defaults::APP_CONFIG_DIR)
+        .join(defaults::TTS_AUDIO_DIR)
+        .join(defaults::TTS_LAST_TEXT_FILE);
+
+    let content = match std::fs::read_to_string(&text_path) {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            log::info!("TTS modal: no hay texto previo");
+            return;
+        }
+    };
+
+    // Formato del archivo: primera línea = título, resto = texto
+    let mut lines = content.splitn(2, '\n');
+    let title = lines.next().unwrap_or("TTS").trim().to_string();
+    let text  = lines.next().unwrap_or("").trim().to_string();
+    if text.is_empty() { return; }
+
+    std::thread::spawn(move || {
+        let tmp = std::path::PathBuf::from(&home)
+            .join(defaults::APP_CONFIG_DIR)
+            .join("last-tts-modal.txt");
+        if std::fs::write(&tmp, &text).is_err() { return; }
+        let script = format!(
+            "set t to (do shell script \"cat '{}'\")\n\
+             display dialog t with title \"{}\" buttons {{\"OK\"}} default button \"OK\"",
+            tmp.display(), title
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e").arg(&script)
+            .status();
+    });
 }
 
 /// Pressed: inicia grabación si está en reposo
