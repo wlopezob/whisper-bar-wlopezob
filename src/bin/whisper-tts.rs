@@ -86,6 +86,8 @@ fn main() {
     let gemini_key     = db.get("gemini_api_key",      "");
     let scene          = db.get("tts_scene",           defaults::TTS_DEFAULT_SCENE);
     let sample_context = db.get("tts_sample_context",  defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
+    let playback_rate  = db.get("tts_playback_rate",   defaults::TTS_DEFAULT_PLAYBACK_RATE)
+        .parse::<f32>().unwrap_or(1.0);
 
     let formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
     let formatter_prompt  = db.get("tts_formatter_prompt",  defaults::FORMATTER_DEFAULT_PROMPT);
@@ -135,6 +137,7 @@ fn main() {
         gemini_key,
         scene,
         sample_context,
+        playback_rate,
     });
     tts::cleanup_pid_file();
 

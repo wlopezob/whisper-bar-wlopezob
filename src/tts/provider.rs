@@ -11,6 +11,7 @@ pub struct TtsConfig {
     pub gemini_key: String,
     pub scene: String,
     pub sample_context: String,
+    pub playback_rate: f32,
 }
 
 pub trait TtsProvider {

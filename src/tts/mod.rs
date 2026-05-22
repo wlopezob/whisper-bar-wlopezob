@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const PID_FILE: &str = "/tmp/whisper-tts.pid";
 const AFPLAY_PID_FILE: &str = "/tmp/whisper-tts-afplay.pid";
+const SAY_PID_FILE: &str = "/tmp/whisper-tts-say.pid";
 
 // ── Limpieza de markdown ──────────────────────────────────────────────────────
 
@@ -78,6 +79,30 @@ pub fn is_afplay_running() -> bool {
     false
 }
 
+pub fn is_say_running() -> bool {
+    if let Ok(pid_str) = std::fs::read_to_string(SAY_PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            return std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
+    }
+    false
+}
+
+pub fn kill_say() {
+    if let Ok(pid_str) = std::fs::read_to_string(SAY_PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let _ = std::process::Command::new("kill")
+                .args(["-15", &pid.to_string()])
+                .status();
+        }
+    }
+    let _ = std::fs::remove_file(SAY_PID_FILE);
+}
+
 /// Para cualquier reproducción de afplay en curso
 pub fn kill_afplay() {
     if let Ok(pid_str) = std::fs::read_to_string(AFPLAY_PID_FILE) {
@@ -108,7 +133,7 @@ pub fn speak(text: &str, config: &TtsConfig) {
 
     if config.gemini_key.is_empty() {
         log::info!("TTS: sin clave Gemini, fallback a say");
-        SayProvider.say(clean);
+        SayProvider.say(clean, config.playback_rate);
         return;
     }
 
@@ -117,10 +142,10 @@ pub fn speak(text: &str, config: &TtsConfig) {
     };
 
     match provider.synthesize(clean, &config.voice, &config.scene, &config.sample_context) {
-        Ok(audio) => play_audio_file(audio),
+        Ok(audio) => play_audio_file(audio, config.playback_rate),
         Err(e) => {
             log::error!("TTS Gemini error: {} — fallback a say", e);
-            SayProvider.say(clean);
+            SayProvider.say(clean, config.playback_rate);
         }
     }
 }
@@ -135,7 +160,7 @@ pub fn last_audio_path() -> Option<std::path::PathBuf> {
     )
 }
 
-fn play_audio_file(audio: AudioData) {
+fn play_audio_file(audio: AudioData, rate: f32) {
     let tmp = format!("/tmp/whisper-tts-audio.{}", audio.ext);
     if std::fs::write(&tmp, &audio.bytes).is_err() {
         log::error!("TTS: no se pudo escribir archivo temporal de audio");
@@ -153,7 +178,12 @@ fn play_audio_file(audio: AudioData) {
     }
 
     // spawn() en vez de status() para obtener el PID y permitir kill externo
-    match std::process::Command::new("afplay").arg(&tmp).spawn() {
+    let mut cmd = std::process::Command::new("afplay");
+    if (rate - 1.0).abs() > 0.01 {
+        cmd.args(["-r", &format!("{:.2}", rate), "-q", "1"]);
+    }
+    cmd.arg(&tmp);
+    match cmd.spawn() {
         Ok(mut child) => {
             let _ = std::fs::write(AFPLAY_PID_FILE, child.id().to_string());
             let _ = child.wait();

@@ -66,6 +66,7 @@ struct WhisperApp {
     tts_sample_context: Arc<Mutex<String>>,
     tts_formatter_enabled: Arc<Mutex<bool>>,
     tts_formatter_prompt: Arc<Mutex<String>>,
+    tts_playback_rate: Arc<Mutex<String>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -111,6 +112,7 @@ impl WhisperApp {
         let tts_sample_context = db.get("tts_sample_context", defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
         let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
         let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
+        let tts_playback_rate = db.get("tts_playback_rate", defaults::TTS_DEFAULT_PLAYBACK_RATE);
 
         log::info!("=== whisperwlopezob v2.0.0 ===");
         log::info!(
@@ -169,6 +171,7 @@ impl WhisperApp {
             tts_sample_context: Arc::new(Mutex::new(tts_sample_context)),
             tts_formatter_enabled: Arc::new(Mutex::new(tts_formatter_enabled)),
             tts_formatter_prompt: Arc::new(Mutex::new(tts_formatter_prompt)),
+            tts_playback_rate: Arc::new(Mutex::new(tts_playback_rate)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -491,6 +494,8 @@ impl WhisperApp {
         self.db.set("tts_formatter_enabled", if v.tts_formatter_enabled { "true" } else { "false" });
         *self.tts_formatter_prompt.lock().unwrap() = v.tts_formatter_prompt.clone();
         self.db.set("tts_formatter_prompt", &v.tts_formatter_prompt);
+        *self.tts_playback_rate.lock().unwrap() = v.tts_playback_rate.clone();
+        self.db.set("tts_playback_rate", &v.tts_playback_rate);
         log::info!(
             "TTS: {} voz={} gemini_key={}",
             if v.tts_enabled { "activo" } else { "inactivo" },
@@ -563,6 +568,7 @@ impl ApplicationHandler for WhisperApp {
                     tts_sample_context: self.tts_sample_context.lock().unwrap().clone(),
                     tts_formatter_enabled: *self.tts_formatter_enabled.lock().unwrap(),
                     tts_formatter_prompt: self.tts_formatter_prompt.lock().unwrap().clone(),
+                    tts_playback_rate: self.tts_playback_rate.lock().unwrap().clone(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
@@ -609,7 +615,9 @@ impl ApplicationHandler for WhisperApp {
             } else if Some(event.id) == self.replay_hotkey_id
                 && event.state == HotKeyState::Pressed
             {
-                replay_last_tts();
+                let rate = self.tts_playback_rate.lock().unwrap()
+                    .parse::<f32>().unwrap_or(1.0);
+                replay_last_tts(rate);
             }
         }
 
@@ -657,10 +665,15 @@ fn is_accessibility_trusted() -> bool {
 }
 
 /// ⌘⌥R: toggle — para si hay audio reproduciéndose, inicia replay si no hay nada
-fn replay_last_tts() {
+fn replay_last_tts(rate: f32) {
     if tts::is_afplay_running() {
-        log::info!("TTS replay: parando reproducción en curso");
+        log::info!("TTS replay: parando afplay en curso");
         tts::kill_afplay();
+        return;
+    }
+    if tts::is_say_running() {
+        log::info!("TTS replay: parando say en curso (fallback)");
+        tts::kill_say();
         return;
     }
 
@@ -671,8 +684,12 @@ fn replay_last_tts() {
         Some(path) if path.exists() => {
             log::info!("TTS replay: reproduciendo {:?}", path);
             std::thread::spawn(move || {
-                // Reutilizar play_audio_file indirectamente via afplay con PID tracking
-                if let Ok(mut child) = std::process::Command::new("afplay").arg(&path).spawn() {
+                let mut cmd = std::process::Command::new("afplay");
+                if (rate - 1.0).abs() > 0.01 {
+                    cmd.args(["-r", &format!("{:.2}", rate), "-q", "1"]);
+                }
+                cmd.arg(&path);
+                if let Ok(mut child) = cmd.spawn() {
                     let _ = std::fs::write("/tmp/whisper-tts-afplay.pid", child.id().to_string());
                     let _ = child.wait();
                     let _ = std::fs::remove_file("/tmp/whisper-tts-afplay.pid");

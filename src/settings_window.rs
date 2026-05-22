@@ -35,6 +35,7 @@ pub struct SettingsValues {
     pub tts_sample_context: String,
     pub tts_formatter_enabled: bool,
     pub tts_formatter_prompt: String,
+    pub tts_playback_rate: String,
 }
 
 // ── Thread-local: referencias a los campos de Azure para el callback ─────────
@@ -429,8 +430,17 @@ pub fn show_settings_modal(
     } else {
         &current.tts_voice
     };
-    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 361.0, 340.0, mtm);
+    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 361.0, 200.0, mtm);
     content.addSubview(&tf_tts_voice);
+
+    content.addSubview(&label("Vel:", 268.0, 364.0, 30.0, mtm));
+    let rate_initial = if current.tts_playback_rate.is_empty() {
+        crate::defaults::TTS_DEFAULT_PLAYBACK_RATE
+    } else {
+        &current.tts_playback_rate
+    };
+    let tf_tts_rate = input_field(rate_initial, 300.0, 361.0, 100.0, mtm);
+    content.addSubview(&tf_tts_rate);
 
     content.addSubview(&label("Escena:", 20.0, 333.0, 55.0, mtm));
     let scroll_tts_scene = NSScrollView::initWithFrame(
@@ -646,6 +656,10 @@ pub fn show_settings_modal(
         let v = txt_formatter_prompt.string().to_string().trim().to_string();
         if v.is_empty() { crate::defaults::FORMATTER_DEFAULT_PROMPT.to_string() } else { v }
     };
+    let tts_playback_rate = {
+        let v = tf_tts_rate.stringValue().to_string().trim().to_string();
+        if v.parse::<f32>().is_ok() { v } else { crate::defaults::TTS_DEFAULT_PLAYBACK_RATE.to_string() }
+    };
 
     Some(SettingsValues {
         language,
@@ -668,5 +682,6 @@ pub fn show_settings_modal(
         tts_sample_context,
         tts_formatter_enabled,
         tts_formatter_prompt,
+        tts_playback_rate,
     })
 }

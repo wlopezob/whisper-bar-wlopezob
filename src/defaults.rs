@@ -63,6 +63,9 @@ pub const TTS_LAST_AUDIO_FILE: &str = "last-tts.wav";
 /// Voz Gemini por defecto para síntesis TTS
 pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
 
+/// Velocidad de reproducción TTS (1.0 = normal, 0.85 = 85%)
+pub const TTS_DEFAULT_PLAYBACK_RATE: &str = "1.0";
+
 /// Descripción de escena por defecto para el director's note de Gemini TTS
 pub const TTS_DEFAULT_SCENE: &str =
     "A highly natural female AI assistant speaking fluent Latin American Spanish \
