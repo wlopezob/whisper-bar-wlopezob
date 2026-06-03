@@ -39,9 +39,9 @@ pub const TRANSLATE_DEST_LANG: &str = "es";
 /// Versión de la API de Azure MAI Transcribe (LLM Speech API)
 pub const AZURE_MAI_API_VERSION: &str = "2025-10-15";
 
-/// Definition JSON por defecto para MAI-Transcribe-1
+/// Definition JSON por defecto para MAI-Transcribe-1.5
 pub const AZURE_MAI_DEFINITION: &str =
-    r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1"}}"#;
+    r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}"#;
 
 /// Prompt de corrección gramatical por defecto para inglés.
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
