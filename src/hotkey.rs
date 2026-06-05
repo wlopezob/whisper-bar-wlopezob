@@ -7,44 +7,66 @@ use global_hotkey::{
 
 pub struct HotkeyHandler {
     manager: GlobalHotKeyManager,
-    hotkey: HotKey,
-    hotkey_id: u32,
+    hotkey_record: HotKey,
+    hotkey_replay: HotKey,
+    hotkey_modal: HotKey,
+    record_id: u32,
+    replay_id: u32,
+    modal_id: u32,
 }
 
 impl HotkeyHandler {
-    /// Registra el hotkey ⌘⌥W (Cmd+Option+W) para iniciar/detener grabación
-    /// Requiere permiso de Accesibilidad en System Settings
+    /// Registra ⌘⌥W (grabar), ⌘⌥R (repetir audio) y ⌘⌥V (ver texto modal)
     pub fn new() -> Result<Self, String> {
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| format!("Error creando hotkey manager: {}", e))?;
 
-        // ⌘⌥W — Cmd+Option+W para grabar / detener
-        let hotkey = HotKey::new(
-            Some(Modifiers::META | Modifiers::ALT),
-            Code::KeyW,
-        );
+        let hotkey_record = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyW);
+        let hotkey_replay = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyR);
+        let hotkey_modal  = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyV);
 
-        let hotkey_id = hotkey.id();
+        let record_id = hotkey_record.id();
+        let replay_id = hotkey_replay.id();
+        let modal_id  = hotkey_modal.id();
 
         manager
-            .register(hotkey)
+            .register(hotkey_record)
             .map_err(|e| format!("Error registrando ⌘⌥W: {}", e))?;
+        manager
+            .register(hotkey_replay)
+            .map_err(|e| format!("Error registrando ⌘⌥R: {}", e))?;
+        manager
+            .register(hotkey_modal)
+            .map_err(|e| format!("Error registrando ⌘⌥V: {}", e))?;
 
         Ok(HotkeyHandler {
             manager,
-            hotkey,
-            hotkey_id,
+            hotkey_record,
+            hotkey_replay,
+            hotkey_modal,
+            record_id,
+            replay_id,
+            modal_id,
         })
     }
 
-    /// ID del hotkey registrado — usar para comparar eventos en el event loop
     pub fn hotkey_id(&self) -> u32 {
-        self.hotkey_id
+        self.record_id
+    }
+
+    pub fn replay_hotkey_id(&self) -> u32 {
+        self.replay_id
+    }
+
+    pub fn modal_hotkey_id(&self) -> u32 {
+        self.modal_id
     }
 }
 
 impl Drop for HotkeyHandler {
     fn drop(&mut self) {
-        let _ = self.manager.unregister(self.hotkey);
+        let _ = self.manager.unregister(self.hotkey_record);
+        let _ = self.manager.unregister(self.hotkey_replay);
+        let _ = self.manager.unregister(self.hotkey_modal);
     }
 }

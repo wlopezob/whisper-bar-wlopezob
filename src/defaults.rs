@@ -54,6 +54,56 @@ pub const GRAMMAR_PROMPT_ES: &str =
     "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
 
 
+/// Subcarpeta de audio dentro de APP_CONFIG_DIR — guarda last-tts.wav
+pub const TTS_AUDIO_DIR: &str = "audio";
+
+/// Nombre del archivo de la última respuesta TTS (repetir con ⌘⌥R)
+pub const TTS_LAST_AUDIO_FILE: &str = "last-tts.wav";
+
+/// Nombre del archivo con el último texto TTS (ver modal con ⌘⌥V)
+pub const TTS_LAST_TEXT_FILE: &str = "last-tts-text.txt";
+
+/// Voz Gemini por defecto para síntesis TTS
+pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
+
+/// Velocidad de reproducción TTS (1.0 = normal, 0.85 = 85%)
+pub const TTS_DEFAULT_PLAYBACK_RATE: &str = "1.0";
+
+/// Descripción de escena por defecto para el director's note de Gemini TTS
+pub const TTS_DEFAULT_SCENE: &str =
+    "A highly natural female AI assistant speaking fluent Latin American Spanish \
+     and English naturally. She sounds warm, intelligent, calm, conversational, \
+     and human-like. Maintain smooth pacing, realistic pauses, subtle emotional \
+     nuance, and clear pronunciation in both Spanish and English. Never sound \
+     robotic, overly excited, or exaggerated.";
+
+/// Contexto de muestra por defecto para el director's note de Gemini TTS
+pub const TTS_DEFAULT_SAMPLE_CONTEXT: &str =
+    "The assistant is having a real-time voice conversation with a user. \
+     Responses should feel fluid, natural, concise, friendly, and emotionally \
+     subtle in both English and Spanish. Maintain conversational rhythm with \
+     realistic pauses and natural transitions between languages when needed.";
+
+/// Modelo Gemini para formatear respuestas antes de TTS
+pub const GEMINI_FORMATTER_MODEL: &str = "gemini-3.1-flash-lite";
+
+/// Prompt por defecto para el formateador TTS (convierte respuestas AI a prosa natural)
+pub const FORMATTER_DEFAULT_PROMPT: &str =
+    "Your task: rewrite an AI assistant's response so it sounds natural when read aloud.\n\n\
+     CRITICAL — LANGUAGE RULE (read first):\n\
+     Detect the language of [Assistant response]. Output MUST be in that exact language.\n\
+     If the assistant wrote in English → your output in English.\n\
+     If the assistant wrote in Spanish → your output in Spanish.\n\
+     NEVER translate. NEVER switch languages.\n\n\
+     Rules:\n\
+     1. Remove all source code. If there is code, describe in one sentence what it does.\n\
+     2. Remove markdown formatting: asterisks, backticks, headers, list dashes.\n\
+     3. Convert lists into flowing sentences joined with \"and\", \"also\", or \"additionally\".\n\
+     4. Be concise: max 4 sentences for short responses, 8 for long ones.\n\
+     5. Keep critical warnings, errors, and important next steps.\n\
+     6. Direct conversational tone. No phrases like \"Here is:\" or \"In summary:\".\n\
+     7. Output ONLY the ready-to-speak text. Nothing else.";
+
 /// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
 pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)

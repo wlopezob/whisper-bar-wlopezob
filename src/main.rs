@@ -1,17 +1,10 @@
 // src/main.rs
 
-mod azure_transcriber;
-mod config;
-mod db;
-mod defaults;
-mod hotkey;
-mod llm;
-mod logger;
-mod recorder;
-mod settings_window;
-mod transcriber;
-
-use settings_window::{SettingsValues, show_settings_modal};
+use whisper_bar_rust::{
+    azure_transcriber, config, db, defaults, hotkey, llm,
+    logger, recorder, transcriber, tts,
+};
+use whisper_bar_rust::settings_window::{SettingsValues, show_settings_modal};
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -65,6 +58,16 @@ struct WhisperApp {
     azure_mai_model: Arc<Mutex<String>>,
     azure_mai_api_version: Arc<Mutex<String>>,
     azure_mai_definition: Arc<Mutex<String>>,
+    // TTS
+    tts_enabled: Arc<Mutex<bool>>,
+    tts_voice: Arc<Mutex<String>>,
+    gemini_api_key: Arc<Mutex<String>>,
+    tts_scene: Arc<Mutex<String>>,
+    tts_sample_context: Arc<Mutex<String>>,
+    tts_formatter_enabled: Arc<Mutex<bool>>,
+    tts_formatter_prompt: Arc<Mutex<String>>,
+    tts_playback_rate: Arc<Mutex<String>>,
+    tts_show_modal: Arc<Mutex<bool>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -81,6 +84,8 @@ struct WhisperApp {
     llm_model_items: Vec<(tray_icon::menu::MenuItem, String)>,
     _hotkey_handler: Option<HotkeyHandler>,
     hotkey_id: Option<u32>,
+    replay_hotkey_id: Option<u32>,
+    modal_hotkey_id: Option<u32>,
 }
 
 impl WhisperApp {
@@ -101,8 +106,18 @@ impl WhisperApp {
         let azure_mai_model = db.get("azure_mai_model", "");
         let azure_mai_api_version = db.get("azure_mai_api_version", defaults::AZURE_MAI_API_VERSION);
         let azure_mai_definition = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
+        // TTS
+        let tts_enabled = db.get("tts_enabled", "false") == "true";
+        let tts_voice = db.get("tts_voice", defaults::TTS_DEFAULT_VOICE);
+        let gemini_api_key = db.get("gemini_api_key", "");
+        let tts_scene = db.get("tts_scene", defaults::TTS_DEFAULT_SCENE);
+        let tts_sample_context = db.get("tts_sample_context", defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
+        let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
+        let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
+        let tts_playback_rate = db.get("tts_playback_rate", defaults::TTS_DEFAULT_PLAYBACK_RATE);
+        let tts_show_modal = db.get("tts_show_modal", "false") == "true";
 
-        log::info!("=== whisperwlopezob v0.1.0 ===");
+        log::info!("=== whisperwlopezob v2.0.0 ===");
         log::info!(
             "whisper-cli: {} {}",
             if config.is_whisper_cli_valid() { "✅" } else { "❌" },
@@ -125,6 +140,12 @@ impl WhisperApp {
             if azure_mai_enabled { "✅ activo" } else { "☐ inactivo" },
             if azure_mai_region.is_empty() { "—" } else { &azure_mai_region }
         );
+        log::info!(
+            "TTS:         {} voz={} gemini_key={}",
+            if tts_enabled { "✅ activo" } else { "☐ inactivo" },
+            tts_voice,
+            if gemini_api_key.is_empty() { "vacía" } else { "configurada" }
+        );
 
         let (ui_tx, ui_rx) = mpsc::channel();
 
@@ -146,6 +167,15 @@ impl WhisperApp {
             azure_mai_model: Arc::new(Mutex::new(azure_mai_model)),
             azure_mai_api_version: Arc::new(Mutex::new(azure_mai_api_version)),
             azure_mai_definition: Arc::new(Mutex::new(azure_mai_definition)),
+            tts_enabled: Arc::new(Mutex::new(tts_enabled)),
+            tts_voice: Arc::new(Mutex::new(tts_voice)),
+            gemini_api_key: Arc::new(Mutex::new(gemini_api_key)),
+            tts_scene: Arc::new(Mutex::new(tts_scene)),
+            tts_sample_context: Arc::new(Mutex::new(tts_sample_context)),
+            tts_formatter_enabled: Arc::new(Mutex::new(tts_formatter_enabled)),
+            tts_formatter_prompt: Arc::new(Mutex::new(tts_formatter_prompt)),
+            tts_playback_rate: Arc::new(Mutex::new(tts_playback_rate)),
+            tts_show_modal: Arc::new(Mutex::new(tts_show_modal)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -159,6 +189,8 @@ impl WhisperApp {
             llm_model_items: Vec::new(),
             _hotkey_handler: None,
             hotkey_id: None,
+            replay_hotkey_id: None,
+            modal_hotkey_id: None,
         }
     }
 
@@ -171,7 +203,7 @@ impl WhisperApp {
         let menu = Menu::new();
 
         let title_item = MenuItem::new("whisperwlopezob", false, None);
-        let hint_item = MenuItem::new("Mantén ⌘⌥W para grabar / suelta para transcribir", false, None);
+        let hint_item = MenuItem::new("Mantén ⌘⌥W para grabar / suelta para transcribir  ·  ⌘⌥R reproducir o parar última respuesta", false, None);
 
         let cli_label = if self.config.is_whisper_cli_valid() {
             format!("✅ whisper-cli: {}", self.config.whisper_cli_path)
@@ -301,7 +333,7 @@ impl WhisperApp {
         match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_title("🎙")
-            .with_tooltip("whisperwlopezob — ⌘⌥W para grabar")
+            .with_tooltip("whisperwlopezob — ⌘⌥W grabar · ⌘⌥R reproducir/parar")
             .build()
         {
             Ok(tray) => {
@@ -323,9 +355,15 @@ impl WhisperApp {
         match HotkeyHandler::new() {
             Ok(h) => {
                 let id = h.hotkey_id();
+                let replay_id = h.replay_hotkey_id();
+                let modal_id  = h.modal_hotkey_id();
                 log::info!("hotkey: ✅ ⌘⌥W registrado (id={})", id);
+                log::info!("hotkey: ✅ ⌘⌥R registrado (id={})", replay_id);
+                log::info!("hotkey: ✅ ⌘⌥V registrado (id={})", modal_id);
                 self._hotkey_handler = Some(h);
                 self.hotkey_id = Some(id);
+                self.replay_hotkey_id = Some(replay_id);
+                self.modal_hotkey_id = Some(modal_id);
             }
             Err(e) => {
                 log::error!("hotkey: ❌ {}", e);
@@ -341,7 +379,7 @@ impl WhisperApp {
             log::error!("→ System Settings → Privacy & Security → Accessibility → activa whisperwlopezob");
         }
 
-        log::info!("whisperwlopezob activo. Mantén ⌘⌥W para grabar, suelta para transcribir.");
+        log::info!("whisperwlopezob activo. Mantén ⌘⌥W para grabar, suelta para transcribir. ⌘⌥R repite la última respuesta TTS.");
         log::info!("Log en tiempo real: tail -f {}", logger::log_path());
 
         // Solicitar permiso de micrófono al arrancar (antes del primer uso)
@@ -449,6 +487,32 @@ impl WhisperApp {
             definition,
         );
 
+        // TTS
+        *self.tts_enabled.lock().unwrap() = v.tts_enabled;
+        self.db.set("tts_enabled", if v.tts_enabled { "true" } else { "false" });
+        *self.tts_voice.lock().unwrap() = v.tts_voice.clone();
+        self.db.set("tts_voice", &v.tts_voice);
+        *self.gemini_api_key.lock().unwrap() = v.gemini_api_key.clone();
+        self.db.set("gemini_api_key", &v.gemini_api_key);
+        *self.tts_scene.lock().unwrap() = v.tts_scene.clone();
+        self.db.set("tts_scene", &v.tts_scene);
+        *self.tts_sample_context.lock().unwrap() = v.tts_sample_context.clone();
+        self.db.set("tts_sample_context", &v.tts_sample_context);
+        *self.tts_formatter_enabled.lock().unwrap() = v.tts_formatter_enabled;
+        self.db.set("tts_formatter_enabled", if v.tts_formatter_enabled { "true" } else { "false" });
+        *self.tts_formatter_prompt.lock().unwrap() = v.tts_formatter_prompt.clone();
+        self.db.set("tts_formatter_prompt", &v.tts_formatter_prompt);
+        *self.tts_playback_rate.lock().unwrap() = v.tts_playback_rate.clone();
+        self.db.set("tts_playback_rate", &v.tts_playback_rate);
+        *self.tts_show_modal.lock().unwrap() = v.tts_show_modal;
+        self.db.set("tts_show_modal", if v.tts_show_modal { "true" } else { "false" });
+        log::info!(
+            "TTS: {} voz={} gemini_key={}",
+            if v.tts_enabled { "activo" } else { "inactivo" },
+            v.tts_voice,
+            if v.gemini_api_key.is_empty() { "vacía" } else { "configurada" },
+        );
+
         log::info!("Configuración aplicada");
     }
 }
@@ -507,6 +571,15 @@ impl ApplicationHandler for WhisperApp {
                     azure_mai_model: self.azure_mai_model.lock().unwrap().clone(),
                     azure_mai_api_version: self.azure_mai_api_version.lock().unwrap().clone(),
                     azure_mai_definition: self.azure_mai_definition.lock().unwrap().clone(),
+                    tts_enabled: *self.tts_enabled.lock().unwrap(),
+                    tts_voice: self.tts_voice.lock().unwrap().clone(),
+                    gemini_api_key: self.gemini_api_key.lock().unwrap().clone(),
+                    tts_scene: self.tts_scene.lock().unwrap().clone(),
+                    tts_sample_context: self.tts_sample_context.lock().unwrap().clone(),
+                    tts_formatter_enabled: *self.tts_formatter_enabled.lock().unwrap(),
+                    tts_formatter_prompt: self.tts_formatter_prompt.lock().unwrap().clone(),
+                    tts_playback_rate: self.tts_playback_rate.lock().unwrap().clone(),
+                    tts_show_modal: *self.tts_show_modal.lock().unwrap(),
                 };
                 let models: Vec<String> = self.config.llm_models.iter()
                     .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
@@ -550,6 +623,16 @@ impl ApplicationHandler for WhisperApp {
                         &self.azure_mai_definition,
                     ),
                 }
+            } else if Some(event.id) == self.replay_hotkey_id
+                && event.state == HotKeyState::Pressed
+            {
+                let rate       = self.tts_playback_rate.lock().unwrap().parse::<f32>().unwrap_or(1.0);
+                let show_modal = *self.tts_show_modal.lock().unwrap();
+                replay_last_tts(rate, show_modal);
+            } else if Some(event.id) == self.modal_hotkey_id
+                && event.state == HotKeyState::Pressed
+            {
+                show_last_tts_modal();
             }
         }
 
@@ -594,6 +677,87 @@ fn is_accessibility_trusted() -> bool {
         fn AXIsProcessTrusted() -> bool;
     }
     unsafe { AXIsProcessTrusted() }
+}
+
+/// ⌘⌥R: toggle — para si hay audio reproduciéndose, inicia replay si no hay nada
+fn replay_last_tts(rate: f32, show_modal: bool) {
+    if tts::is_afplay_running() {
+        log::info!("TTS replay: parando afplay en curso");
+        tts::kill_afplay();
+        return;
+    }
+    if tts::is_say_running() {
+        log::info!("TTS replay: parando say en curso (fallback)");
+        tts::kill_say();
+        return;
+    }
+
+    if show_modal {
+        show_last_tts_modal();
+    }
+
+    // Parar también cualquier instancia de whisper-tts del hook antes de reproducir
+    tts::kill_previous_instance();
+
+    match tts::last_audio_path() {
+        Some(path) if path.exists() => {
+            log::info!("TTS replay: reproduciendo {:?}", path);
+            std::thread::spawn(move || {
+                let mut cmd = std::process::Command::new("afplay");
+                if (rate - 1.0).abs() > 0.01 {
+                    cmd.args(["-r", &format!("{:.2}", rate), "-q", "1"]);
+                }
+                cmd.arg(&path);
+                if let Ok(mut child) = cmd.spawn() {
+                    let _ = std::fs::write("/tmp/whisper-tts-afplay.pid", child.id().to_string());
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file("/tmp/whisper-tts-afplay.pid");
+                }
+            });
+        }
+        _ => log::info!("TTS replay: no hay audio previo para reproducir"),
+    }
+}
+
+/// ⌘⌥V: muestra modal con el último texto TTS
+fn show_last_tts_modal() {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => { log::warn!("TTS modal: HOME no definido"); return; }
+    };
+    let text_path = std::path::PathBuf::from(&home)
+        .join(defaults::APP_CONFIG_DIR)
+        .join(defaults::TTS_AUDIO_DIR)
+        .join(defaults::TTS_LAST_TEXT_FILE);
+
+    let content = match std::fs::read_to_string(&text_path) {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            log::info!("TTS modal: no hay texto previo");
+            return;
+        }
+    };
+
+    // Formato del archivo: primera línea = título, resto = texto
+    let mut lines = content.splitn(2, '\n');
+    let title = lines.next().unwrap_or("TTS").trim().to_string();
+    let text  = lines.next().unwrap_or("").trim().to_string();
+    if text.is_empty() { return; }
+
+    std::thread::spawn(move || {
+        let tmp = std::path::PathBuf::from(&home)
+            .join(defaults::APP_CONFIG_DIR)
+            .join("last-tts-modal.txt");
+        if std::fs::write(&tmp, &text).is_err() { return; }
+        let script = format!(
+            "set t to (do shell script \"cat '{}'\")\n\
+             display dialog t with title \"{}\" buttons {{\"OK\"}} default button \"OK\"",
+            tmp.display(), title
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e").arg(&script)
+            .status();
+    });
 }
 
 /// Pressed: inicia grabación si está en reposo

@@ -9,7 +9,7 @@ APP_DIR="/Applications/${APP_NAME}.app"
 LOG_PATH="${HOME}/.config/${APP_NAME}/${APP_NAME}.log"
 
 echo "🔨 Compilando..."
-cargo build --release
+cargo build --release --bins
 
 echo "📦 Creando bundle ${APP_NAME}.app..."
 
@@ -49,10 +49,10 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <string>${BUNDLE_ID}</string>
 
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>2.0.0</string>
 
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>2.0.0</string>
 
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
@@ -81,6 +81,80 @@ EOF
 
 # Quitar cuarentena
 xattr -dr com.apple.quarantine "${APP_DIR}" 2>/dev/null || true
+
+# ── Instalar whisper-tts en ~/.local/bin ──────────────────────────────────────
+echo "📦 Instalando whisper-tts..."
+mkdir -p "${HOME}/.local/bin"
+cp target/release/whisper-tts "${HOME}/.local/bin/whisper-tts"
+chmod +x "${HOME}/.local/bin/whisper-tts"
+echo "  → ${HOME}/.local/bin/whisper-tts"
+
+# ── Instalar Stop hook de Claude Code ────────────────────────────────────────
+echo "🔗 Instalando Claude Code Stop hook..."
+mkdir -p "${HOME}/.claude/hooks"
+cp hooks/whisper-tts-stop.sh "${HOME}/.claude/hooks/whisper-tts-stop.sh"
+chmod +x "${HOME}/.claude/hooks/whisper-tts-stop.sh"
+echo "  → ${HOME}/.claude/hooks/whisper-tts-stop.sh"
+
+# Registrar el hook en ~/.claude/settings.json si no está ya
+SETTINGS="${HOME}/.claude/settings.json"
+HOOK_CMD="${HOME}/.claude/hooks/whisper-tts-stop.sh"
+if ! python3 -c "
+import json, sys
+with open('${SETTINGS}') as f:
+    data = json.load(f)
+stops = data.get('hooks', {}).get('Stop', [])
+cmds = [h.get('command','') for s in stops for h in s.get('hooks',[])]
+sys.exit(0 if '${HOOK_CMD}' in cmds else 1)
+" 2>/dev/null; then
+    python3 - "${SETTINGS}" "${HOOK_CMD}" <<'PYEOF'
+import json, sys
+
+settings_path, hook_cmd = sys.argv[1], sys.argv[2]
+with open(settings_path) as f:
+    data = json.load(f)
+
+data.setdefault('hooks', {}).setdefault('Stop', []).append({
+    'hooks': [{
+        'type': 'command',
+        'command': hook_cmd,
+        'async': True
+    }]
+})
+
+with open(settings_path, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+PYEOF
+    echo "  → Stop hook registrado en ${SETTINGS}"
+else
+    echo "  → Stop hook ya registrado (sin cambios)"
+fi
+
+# ── Instalar Stop hook de Codex CLI ──────────────────────────────────────────
+echo "🔗 Instalando Codex CLI Stop hook..."
+mkdir -p "${HOME}/.codex/hooks"
+cp hooks/whisper-tts-codex-stop.sh "${HOME}/.codex/hooks/whisper-tts-stop.sh"
+chmod +x "${HOME}/.codex/hooks/whisper-tts-stop.sh"
+echo "  → ${HOME}/.codex/hooks/whisper-tts-stop.sh"
+
+CODEX_HOOKS="${HOME}/.codex/hooks.json"
+CODEX_HOOK_CMD="${HOME}/.codex/hooks/whisper-tts-stop.sh"
+python3 - "${CODEX_HOOKS}" "${CODEX_HOOK_CMD}" <<'PYEOF'
+import json, sys, os
+hooks_file, hook_path = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.isfile(hooks_file):
+    with open(hooks_file) as f:
+        try: data = json.load(f)
+        except json.JSONDecodeError: data = {}
+# Formato correcto: array de matcher+handler objects
+data.setdefault("hooks", {})["Stop"] = [{"hooks": [{"type": "command", "command": hook_path, "timeout": 30}]}]
+with open(hooks_file, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PYEOF
+echo "  → Stop hook registrado en ${CODEX_HOOKS}"
 
 echo ""
 echo "✅ Instalado en: ${APP_DIR}"

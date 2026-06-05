@@ -66,3 +66,24 @@ pub fn init() {
     log::info!("=== whisperwlopezob iniciado ===");
     log::info!("Log en: {}", log_path());
 }
+
+/// Inicializa el logger en modo append (sin truncar el archivo existente).
+/// Usar en binaries secundarios que no deben borrar el log de la app principal.
+pub fn init_append() {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let path = format!("{}/{}/whisperwlopezob.log", home, crate::defaults::APP_CONFIG_DIR);
+    std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("/tmp"))).ok();
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    simplelog::WriteLogger::init(
+        simplelog::LevelFilter::Info,
+        simplelog::Config::default(),
+        file,
+    ).ok();
+}

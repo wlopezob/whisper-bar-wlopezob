@@ -1,0 +1,12 @@
+pub mod azure_transcriber;
+pub mod config;
+pub mod db;
+pub mod defaults;
+pub mod formatter;
+pub mod hotkey;
+pub mod llm;
+pub mod logger;
+pub mod recorder;
+pub mod settings_window;
+pub mod transcriber;
+pub mod tts;
