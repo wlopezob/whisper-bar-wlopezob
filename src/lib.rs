@@ -9,4 +9,5 @@ pub mod logger;
 pub mod recorder;
 pub mod settings_window;
 pub mod transcriber;
+pub mod translator;
 pub mod tts;

@@ -1,8 +1,8 @@
 // src/main.rs
 
 use whisper_bar_rust::{
-    azure_transcriber, config, db, defaults, hotkey, llm,
-    logger, recorder, transcriber, tts,
+    azure_transcriber, config, db, defaults, hotkey,
+    logger, recorder, transcriber, translator, tts,
 };
 use whisper_bar_rust::settings_window::{SettingsValues, show_settings_modal};
 
@@ -44,11 +44,6 @@ struct WhisperApp {
     db: Arc<db::Db>,
     app_state: Arc<Mutex<AppState>>,
     recorder: Arc<Mutex<Recorder>>,
-    current_language: Arc<Mutex<String>>,
-    llm_enabled: Arc<Mutex<bool>>,
-    llm_model: Arc<Mutex<String>>,
-    grammar_prompt_es: Arc<Mutex<String>>,
-    grammar_prompt_en: Arc<Mutex<String>>,
     translate_enabled: Arc<Mutex<bool>>,
     translate_dest_lang: Arc<Mutex<String>>,
     // Azure MAI Transcribe
@@ -76,12 +71,7 @@ struct WhisperApp {
     quit_id: Option<tray_icon::menu::MenuId>,
     log_id: Option<tray_icon::menu::MenuId>,
     settings_id: Option<tray_icon::menu::MenuId>,
-    lang_es_item: Option<tray_icon::menu::MenuItem>,
-    lang_en_item: Option<tray_icon::menu::MenuItem>,
-    improve_item: Option<tray_icon::menu::MenuItem>,
     azure_item: Option<tray_icon::menu::MenuItem>,
-    // (MenuItem, filename) — uno por cada .gguf encontrado (solo lectura en tray)
-    llm_model_items: Vec<(tray_icon::menu::MenuItem, String)>,
     _hotkey_handler: Option<HotkeyHandler>,
     hotkey_id: Option<u32>,
     replay_hotkey_id: Option<u32>,
@@ -93,11 +83,6 @@ impl WhisperApp {
         let config = Arc::new(Config::new());
 
         let db = db::Db::open().expect("No se pudo abrir la base de datos");
-        let language = db.get("language", defaults::LANGUAGE);
-        let llm_enabled = db.get("llm_enabled", "false") == "true";
-        let llm_model = db.get("llm_model", "");
-        let grammar_prompt_es = db.get("grammar_prompt_es", defaults::GRAMMAR_PROMPT_ES);
-        let grammar_prompt_en = db.get("grammar_prompt_en", defaults::GRAMMAR_PROMPT_EN);
         let translate_enabled = db.get("translate_enabled", "false") == "true";
         let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
         let azure_mai_enabled = db.get("azure_mai_enabled", "false") == "true";
@@ -128,7 +113,6 @@ impl WhisperApp {
             if config.is_model_valid() { "✅" } else { "❌" },
             config.model_filename()
         );
-        log::info!("idioma:      {}", language);
         log::info!(
             "llama-cli:   {} {}",
             if config.is_llama_cli_valid() { "✅" } else { "❌" },
@@ -154,11 +138,6 @@ impl WhisperApp {
             db,
             app_state: Arc::new(Mutex::new(AppState::Idle)),
             recorder: Arc::new(Mutex::new(Recorder::new())),
-            current_language: Arc::new(Mutex::new(language)),
-            llm_enabled: Arc::new(Mutex::new(llm_enabled)),
-            llm_model: Arc::new(Mutex::new(llm_model)),
-            grammar_prompt_es: Arc::new(Mutex::new(grammar_prompt_es)),
-            grammar_prompt_en: Arc::new(Mutex::new(grammar_prompt_en)),
             translate_enabled: Arc::new(Mutex::new(translate_enabled)),
             translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
             azure_mai_enabled: Arc::new(Mutex::new(azure_mai_enabled)),
@@ -182,11 +161,7 @@ impl WhisperApp {
             quit_id: None,
             log_id: None,
             settings_id: None,
-            lang_es_item: None,
-            lang_en_item: None,
-            improve_item: None,
             azure_item: None,
-            llm_model_items: Vec::new(),
             _hotkey_handler: None,
             hotkey_id: None,
             replay_hotkey_id: None,
@@ -216,72 +191,8 @@ impl WhisperApp {
             "❌ Modelo no encontrado".to_string()
         };
 
-        let lang = self.current_language.lock().unwrap().clone();
-        let es_label = if lang == "es" { "✓ Español" } else { "  Español" };
-        let en_label = if lang == "en" { "✓ English" } else { "  English" };
-
         let cli_item = MenuItem::new(cli_label, false, None);
         let model_item = MenuItem::new(model_label, false, None);
-        let lang_header = MenuItem::new("Idioma", false, None);
-        let lang_es_item = MenuItem::new(es_label, false, None);
-        let lang_en_item = MenuItem::new(en_label, false, None);
-        // ── Sección LLM ───────────────────────────────────────────────────────
-        let llama_label = if self.config.is_llama_cli_valid() {
-            format!("✅ llama-cli: {}", self.config.llama_cli_path)
-        } else {
-            "❌ llama-cli no encontrado (brew install llama.cpp)".to_string()
-        };
-        let llama_item = MenuItem::new(llama_label, false, None);
-
-        let selected_model = self.llm_model.lock().unwrap().clone();
-        let llm_enabled_val = *self.llm_enabled.lock().unwrap();
-
-        // Un MenuItem informativo (solo lectura) por cada .gguf encontrado
-        let mut llm_model_entries: Vec<(tray_icon::menu::MenuItem, String)> = vec![];
-        let llm_models_header = MenuItem::new("Modelo LLM:", false, None);
-
-        if self.config.llm_models.is_empty() {
-            // Sin modelos disponibles
-        } else {
-            for model_path in &self.config.llm_models {
-                let filename = std::path::Path::new(model_path)
-                    .file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-                let label = if filename == selected_model {
-                    format!("✓ {}", filename)
-                } else {
-                    format!("  {}", filename)
-                };
-                let item = MenuItem::new(label, false, None);
-                llm_model_entries.push((item, filename));
-            }
-        }
-
-        let no_models_item = if self.config.llm_models.is_empty() {
-            Some(MenuItem::new(
-                format!(
-                    "❌ Sin modelos en ~/{}/{}/",
-                    defaults::APP_CONFIG_DIR,
-                    defaults::LLM_MODELS_DIR
-                ),
-                false,
-                None,
-            ))
-        } else {
-            None
-        };
-
-        let improve_enabled = self.config.is_llm_available();
-        let improve_label = if llm_enabled_val { "☑ Mejorar gramática" } else { "☐ Mejorar gramática" };
-        let improve_item = MenuItem::new(
-            if improve_enabled {
-                improve_label
-            } else {
-                "☐ Mejorar gramática (no disponible)"
-            },
-            false,
-            None,
-        );
-
         // ── Azure MAI ─────────────────────────────────────────────────────────
         let azure_enabled_val = *self.azure_mai_enabled.lock().unwrap();
         let azure_region_val = self.azure_mai_region.lock().unwrap().clone();
@@ -306,20 +217,6 @@ impl WhisperApp {
         let _ = menu.append(&cli_item);
         let _ = menu.append(&model_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&lang_header);
-        let _ = menu.append(&lang_es_item);
-        let _ = menu.append(&lang_en_item);
-        let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&llama_item);
-        let _ = menu.append(&llm_models_header);
-        if let Some(ref item) = no_models_item {
-            let _ = menu.append(item);
-        }
-        for (item, _) in &llm_model_entries {
-            let _ = menu.append(item);
-        }
-        let _ = menu.append(&improve_item);
-        let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&azure_item);
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&settings_item);
@@ -342,11 +239,7 @@ impl WhisperApp {
                 self.quit_id = Some(quit_id);
                 self.log_id = Some(ver_log_id);
                 self.settings_id = Some(settings_id);
-                self.lang_es_item = Some(lang_es_item);
-                self.lang_en_item = Some(lang_en_item);
-                self.improve_item = Some(improve_item);
                 self.azure_item = Some(azure_item);
-                self.llm_model_items = llm_model_entries;
             }
             Err(e) => log::error!("Error creando tray icon: {}", e),
         }
@@ -389,64 +282,7 @@ impl WhisperApp {
         });
     }
 
-    /// Cambia el idioma activo, actualiza checkmarks en el menú y persiste en DB
-    fn set_language(&self, lang: &str) {
-        *self.current_language.lock().unwrap() = lang.to_string();
-        self.db.set("language", lang);
-
-        let (es_label, en_label) = if lang == "es" {
-            ("✓ Español", "  English")
-        } else {
-            ("  Español", "✓ English")
-        };
-        if let Some(ref item) = self.lang_es_item { item.set_text(es_label); }
-        if let Some(ref item) = self.lang_en_item { item.set_text(en_label); }
-
-        let name = if lang == "es" { "Español" } else { "English" };
-        log::info!("Idioma cambiado a: {}", name);
-    }
-
     fn apply_settings(&self, v: SettingsValues) {
-        // Idioma
-        self.set_language(&v.language);
-
-        // Gramática
-        *self.llm_enabled.lock().unwrap() = v.grammar_enabled;
-        self.db.set("llm_enabled", if v.grammar_enabled { "true" } else { "false" });
-        let label = if !self.config.is_llm_available() {
-            "☐ Mejorar gramática (no disponible)".to_string()
-        } else if v.grammar_enabled {
-            "☑ Mejorar gramática".to_string()
-        } else {
-            "☐ Mejorar gramática".to_string()
-        };
-        if let Some(ref item) = self.improve_item { item.set_text(label); }
-
-        *self.llm_model.lock().unwrap() = v.grammar_model.clone();
-        self.db.set("llm_model", &v.grammar_model);
-        for (item, name) in &self.llm_model_items {
-            item.set_text(if *name == v.grammar_model {
-                format!("✓ {}", name)
-            } else {
-                format!("  {}", name)
-            });
-        }
-
-        let prompt_es = if v.grammar_prompt_es.is_empty() {
-            defaults::GRAMMAR_PROMPT_ES.to_string()
-        } else {
-            v.grammar_prompt_es.clone()
-        };
-        let prompt_en = if v.grammar_prompt_en.is_empty() {
-            defaults::GRAMMAR_PROMPT_EN.to_string()
-        } else {
-            v.grammar_prompt_en.clone()
-        };
-        *self.grammar_prompt_es.lock().unwrap() = prompt_es.clone();
-        *self.grammar_prompt_en.lock().unwrap() = prompt_en.clone();
-        self.db.set("grammar_prompt_es", &prompt_es);
-        self.db.set("grammar_prompt_en", &prompt_en);
-
         // Traducción
         *self.translate_enabled.lock().unwrap() = v.translate_enabled;
         self.db.set("translate_enabled", if v.translate_enabled { "true" } else { "false" });
@@ -558,11 +394,6 @@ impl ApplicationHandler for WhisperApp {
                     .spawn();
             } else if self.settings_id.as_ref() == Some(event.id()) {
                 let current = SettingsValues {
-                    language: self.current_language.lock().unwrap().clone(),
-                    grammar_enabled: *self.llm_enabled.lock().unwrap(),
-                    grammar_model: self.llm_model.lock().unwrap().clone(),
-                    grammar_prompt_es: self.grammar_prompt_es.lock().unwrap().clone(),
-                    grammar_prompt_en: self.grammar_prompt_en.lock().unwrap().clone(),
                     translate_enabled: *self.translate_enabled.lock().unwrap(),
                     translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
                     azure_mai_enabled: *self.azure_mai_enabled.lock().unwrap(),
@@ -581,10 +412,7 @@ impl ApplicationHandler for WhisperApp {
                     tts_playback_rate: self.tts_playback_rate.lock().unwrap().clone(),
                     tts_show_modal: *self.tts_show_modal.lock().unwrap(),
                 };
-                let models: Vec<String> = self.config.llm_models.iter()
-                    .filter_map(|p| std::path::Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
-                    .collect();
-                if let Some(values) = show_settings_modal(&current, &models) {
+                if let Some(values) = show_settings_modal(&current) {
                     self.apply_settings(values);
                 }
             }
@@ -608,19 +436,14 @@ impl ApplicationHandler for WhisperApp {
                         &self.recorder,
                         &self.config,
                         &self.ui_tx,
-                        &self.current_language,
-                        &self.llm_enabled,
-                        &self.llm_model,
-                        &self.grammar_prompt_es,
-                        &self.grammar_prompt_en,
-                        &self.translate_enabled,
-                        &self.translate_dest_lang,
                         &self.azure_mai_enabled,
                         &self.azure_mai_key,
                         &self.azure_mai_region,
                         &self.azure_mai_model,
                         &self.azure_mai_api_version,
                         &self.azure_mai_definition,
+                        &self.translate_enabled,
+                        &self.translate_dest_lang,
                     ),
                 }
             } else if Some(event.id) == self.replay_hotkey_id
@@ -802,25 +625,20 @@ fn handle_hotkey_pressed(
     }
 }
 
-/// Released: detiene grabación y lanza transcripción (+ corrección LLM y/o traducción si están activas)
+/// Released: detiene grabación y lanza transcripción (+ traducción opcional)
 fn handle_hotkey_released(
     app_state: &Arc<Mutex<AppState>>,
     recorder: &Arc<Mutex<Recorder>>,
     config: &Arc<Config>,
     ui_tx: &mpsc::Sender<UiMsg>,
-    current_language: &Arc<Mutex<String>>,
-    llm_enabled: &Arc<Mutex<bool>>,
-    llm_model: &Arc<Mutex<String>>,
-    grammar_prompt_es: &Arc<Mutex<String>>,
-    grammar_prompt_en: &Arc<Mutex<String>>,
-    translate_enabled: &Arc<Mutex<bool>>,
-    translate_dest_lang: &Arc<Mutex<String>>,
     azure_mai_enabled: &Arc<Mutex<bool>>,
     azure_mai_key: &Arc<Mutex<String>>,
     azure_mai_region: &Arc<Mutex<String>>,
     azure_mai_model_ref: &Arc<Mutex<String>>,
     azure_mai_api_version_ref: &Arc<Mutex<String>>,
     azure_mai_definition_ref: &Arc<Mutex<String>>,
+    translate_enabled: &Arc<Mutex<bool>>,
+    translate_dest_lang: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
@@ -850,20 +668,6 @@ fn handle_hotkey_released(
                     let ui_tx = ui_tx.clone();
                     let cli = config.whisper_cli_path.clone();
                     let model = config.model_path.clone();
-                    let lang = current_language.lock().unwrap().clone();
-                    let use_llm = *llm_enabled.lock().unwrap();
-                    let selected_model = llm_model.lock().unwrap().clone();
-                    let llama_cli = config.llama_cli_path.clone();
-                    let prompt_es = grammar_prompt_es.lock().unwrap().clone();
-                    let prompt_en = grammar_prompt_en.lock().unwrap().clone();
-                    let llm_available = config.is_llm_available();
-                    let llm_model_path = if use_llm && !selected_model.is_empty() {
-                        config.llm_model_path(&selected_model)
-                    } else {
-                        None
-                    };
-                    let use_translate = *translate_enabled.lock().unwrap();
-                    let dest_lang = translate_dest_lang.lock().unwrap().clone();
                     // Azure MAI
                     let use_azure = *azure_mai_enabled.lock().unwrap();
                     let azure_key = azure_mai_key.lock().unwrap().clone();
@@ -871,37 +675,11 @@ fn handle_hotkey_released(
                     let _azure_model = azure_mai_model_ref.lock().unwrap().clone();
                     let azure_api_version = azure_mai_api_version_ref.lock().unwrap().clone();
                     let azure_definition = azure_mai_definition_ref.lock().unwrap().clone();
-                    log::info!(
-                        "🧭 Pipeline: 1/3 transcripción → 2/3 corrección LLM → 3/3 traducción (origen: {}, destino: {}, llm: {}, traducción: {})",
-                        lang,
-                        dest_lang,
-                        if use_llm { "activa" } else { "desactivada" },
-                        if use_translate { "activa" } else { "desactivada" }
-                    );
-                    if use_llm {
-                        if !llm_available {
-                            log::warn!(
-                                "LLM habilitado, pero no disponible (falta llama-cli o modelos .gguf)"
-                            );
-                        } else if selected_model.is_empty() {
-                            log::warn!("LLM habilitado, pero sin modelo seleccionado");
-                        } else if llm_model_path.is_some() {
-                            log::info!(
-                                "LLM habilitado para esta transcripción (modelo: {})",
-                                selected_model
-                            );
-                        } else {
-                            log::warn!(
-                                "LLM habilitado, pero el modelo '{}' no existe en disco",
-                                selected_model
-                            );
-                        }
-                    } else {
-                        log::debug!("LLM deshabilitado para esta transcripción");
-                    }
-
+                    // Traducción
+                    let do_translate = *translate_enabled.lock().unwrap();
+                    let dest_lang = translate_dest_lang.lock().unwrap().clone();
                     std::thread::spawn(move || {
-                        log::info!("🧭 Paso 1/3: iniciando transcripción");
+                        log::info!("🧭 Paso 1: iniciando transcripción");
                         // Elegir backend: Azure MAI o local whisper-cli
                         let transcription_result = if use_azure {
                             log::info!("🔵 Azure MAI: transcribiendo (región={})...", azure_region);
@@ -913,108 +691,41 @@ fn handle_hotkey_released(
                                 &audio_path,
                             )
                         } else {
-                            transcriber::transcribe(&cli, &model, &lang, &audio_path)
+                            transcriber::transcribe(&cli, &model, defaults::LANGUAGE, &audio_path)
                         };
 
                         match transcription_result {
                             Ok(text) => {
-                                log::info!("✅ Paso 1/3 completado");
                                 log::info!("✅ Transcripción: \"{}\"", text);
 
-                                let final_text = if let Some(ref lm_path) = llm_model_path {
-                                    log::info!("🧭 Paso 2/3: iniciando corrección gramatical");
-                                    log::info!(
-                                        "🔧 LLM: iniciando corrección (modelo: {})",
-                                        selected_model
-                                    );
-                                    let llm_start = Instant::now();
-                                    let system_prompt = if lang == "es" {
-                                        prompt_es.as_str()
-                                    } else {
-                                        prompt_en.as_str()
-                                    };
-                                    log::info!(
-                                        "🧩 LLM prompt activo (idioma: {}): {}",
-                                        if lang == "es" { "es" } else { "en" },
-                                        system_prompt.replace('\n', "\\n")
-                                    );
-                                    match llm::correct_grammar(&llama_cli, lm_path, &text, system_prompt) {
-                                        Ok(corrected) => {
-                                            log::info!(
-                                                "✅ LLM aplicado en {:.2}s",
-                                                llm_start.elapsed().as_secs_f64()
-                                            );
-                                            if corrected == text {
-                                                log::info!("LLM completado: sin cambios en el texto");
-                                            } else {
-                                                log::info!("LLM completado: texto corregido");
+                                // Paso opcional: traducción
+                                let final_text = if do_translate && !azure_key.is_empty() && !azure_region.is_empty() {
+                                    log::info!("🌐 Traduciendo a '{}'...", dest_lang);
+                                    match translator::translate(&text, &dest_lang, &azure_key, &azure_region) {
+                                        Ok(result) => {
+                                            if result.was_translated {
+                                                log::info!(
+                                                    "✅ Traducción: '{}' → '{}': \"{}\"",
+                                                    result.detected_lang, dest_lang, result.text
+                                                );
                                             }
-                                            log::info!("✅ Paso 2/3 completado");
-                                            log::info!("✅ Corregido: \"{}\"", corrected);
-                                            corrected
+                                            result.text
                                         }
                                         Err(e) => {
-                                            log::warn!("⚠️ Paso 2/3 falló; se mantiene transcripción original");
-                                            log::warn!("LLM falló (usando transcripción original): {}", e);
+                                            log::error!("❌ Traducción falló, usando texto original: {}", e);
                                             text
                                         }
                                     }
                                 } else {
-                                    if use_llm {
-                                        log::warn!("⏭ Paso 2/3 omitido: mejora gramatical sin modelo/configuración válida");
-                                        log::warn!(
-                                            "LLM no se aplicó por configuración incompleta en esta transcripción"
-                                        );
-                                    } else {
-                                        log::info!("⏭ Paso 2/3 omitido: mejora gramatical desactivada");
-                                    }
                                     text
                                 };
 
-                                let final_text = if use_translate && dest_lang != lang {
-                                    if let Some(ref lm_path) = llm_model_path {
-                                        log::info!(
-                                            "🧭 Paso 3/3: iniciando traducción ({} → {})",
-                                            lang,
-                                            dest_lang
-                                        );
-                                        match llm::translate_text(&llama_cli, lm_path, &final_text, &dest_lang) {
-                                            Ok(t) => {
-                                                log::info!("✅ Paso 3/3 completado");
-                                                log::info!("✅ Traducción completada");
-                                                t
-                                            }
-                                            Err(e) => {
-                                                log::warn!("⚠️ Paso 3/3 falló; se mantiene texto previo");
-                                                log::warn!("Traducción falló: {}", e);
-                                                final_text
-                                            }
-                                        }
-                                    } else {
-                                        log::warn!("⏭ Paso 3/3 omitido: traducción activa pero sin modelo LLM disponible");
-                                        log::warn!("Traducción solicitada pero sin modelo LLM disponible");
-                                        final_text
-                                    }
-                                } else {
-                                    if !use_translate {
-                                        log::info!("⏭ Paso 3/3 omitido: traducción desactivada");
-                                    } else {
-                                        log::info!(
-                                            "⏭ Paso 3/3 omitido: idioma destino igual al origen ({})",
-                                            lang
-                                        );
-                                    }
-                                    final_text
-                                };
-
-                                log::info!("🏁 Pipeline completado");
                                 if ui_tx.send(UiMsg::PasteText(final_text)).is_err() {
                                     log::error!("No se pudo enviar PasteText al hilo UI");
                                 }
                             }
                             Err(e) => {
-                                log::error!("❌ Paso 1/3 falló: {}", e);
-                                log::error!("Error de transcripción: {}", e);
+                                log::error!("❌ Transcripción falló: {}", e);
                             }
                         }
                         let mut s = app_state.lock().unwrap();

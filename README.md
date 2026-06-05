@@ -1,10 +1,11 @@
 # whisperwlopezob
 
-App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` (o Azure MAI) y pega el texto donde está el cursor. Lee en voz alta las respuestas de Claude Code / Codex usando Gemini TTS.
+App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` o Azure MAI Transcribe, traduce automáticamente si el idioma detectado difiere del destino, y pega el texto donde está el cursor. Lee en voz alta las respuestas de Claude Code / Codex usando Gemini TTS.
 
 **Hotkeys:**
 - `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar
 - `⌘⌥R` — reproduce la última respuesta TTS; si ya está reproduciéndose, la para
+- `⌘⌥V` — muestra modal con el último texto TTS
 
 ---
 
@@ -25,10 +26,9 @@ App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` 
 ├── data.db                 # configuración persistente (SQLite)
 ├── whisper-models/         # modelos de Whisper (.bin)
 │   └── ggml-large-v3.bin
-├── llm/                    # modelos LLM para corrección y traducción (.gguf)
-│   └── qwen2.5-1.5b-instruct-q4_k_m.gguf
 └── audio/
-    └── last-tts.wav        # última respuesta TTS (reproducir con ⌘⌥R)
+    ├── last-tts.wav        # último audio TTS (reproducir con ⌘⌥R)
+    └── last-tts-text.txt   # último texto TTS (ver con ⌘⌥V)
 ```
 
 ---
@@ -54,7 +54,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
 
-### 4. Instalar whisper-cpp
+### 4. Instalar whisper-cpp (backend local)
 
 ```bash
 brew install whisper-cpp
@@ -72,27 +72,35 @@ curl -L -o ~/.config/whisperwlopezob/whisper-models/ggml-small.bin \
 
 > La app detecta automáticamente el mejor modelo disponible: `large-v3 → large-v2 → medium → small → base → tiny`
 
-### 6. (Opcional) Corrección gramatical y traducción con LLM local
+### 6. (Recomendado) Azure MAI Transcribe
+
+Transcripción de alta precisión vía Azure Cognitive Services. Requiere:
+- Suscripción de Azure con Speech Services habilitado
+- API Key y región (p.ej. `eastus`)
+
+Configurable desde **Configuración → AZURE MAI TRANSCRIBE → Backend → Azure MAI**.
+
+El modelo por defecto es `mai-transcribe-1.5` con enhanced mode activado.
+
+### 7. (Opcional) Traducción automática
+
+Reutiliza las mismas credenciales de Azure MAI. Cuando está activa:
+- Detecta automáticamente el idioma del texto transcrito
+- Solo traduce si el idioma detectado ≠ idioma destino (sin coste innecesario)
+
+Configurable desde **Configuración → TRADUCCIÓN**.
+
+### 8. (Opcional) Lectura de respuestas con Gemini TTS
+
+Requiere una API key de Google Gemini. Configurable desde **Configuración → LECTURA DE RESPUESTAS**.
+
+Para que las respuestas de Claude Code / Codex se lean automáticamente al terminar cada respuesta:
 
 ```bash
-brew install llama.cpp
-mkdir -p ~/.config/whisperwlopezob/llm
-
-curl -L -o ~/.config/whisperwlopezob/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf \
-  https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+bash bundle.sh   # instala también los hooks de Claude Code y Codex
 ```
 
-### 7. (Opcional) Lectura de respuestas con Gemini TTS
-
-Requiere una API key de Google Gemini. Configurable desde **Configuración → Lectura de respuestas**.
-
-Para que las respuestas de Claude Code / Codex se lean automáticamente al terminar cada respuesta, instala el hook:
-
-```bash
-bash bundle.sh   # instala también el hook de Claude Code y Codex
-```
-
-### 8. Compilar e instalar como .app
+### 9. Compilar e instalar como .app
 
 ```bash
 git clone <url-del-repositorio>
@@ -106,7 +114,7 @@ bash bundle.sh
 
 ### Accesibilidad (obligatorio)
 
-Requerido para registrar `⌘⌥W` / `⌘⌥R` y simular `⌘V` para pegar.
+Requerido para registrar `⌘⌥W` / `⌘⌥R` / `⌘⌥V` y simular `⌘V` para pegar.
 
 1. Ejecuta la app: `open /Applications/whisperwlopezob.app`
 2. Ve a **System Settings → Privacy & Security → Accessibility**
@@ -139,63 +147,51 @@ tail -f ~/.config/whisperwlopezob/whisperwlopezob.log  # ver log
 | Acción | Resultado |
 |--------|-----------|
 | Mantener `⌘⌥W` | Inicia grabación — icono cambia a `🔴` |
-| Soltar `⌘⌥W` | Detiene grabación — icono `⏳` — transcribe y pega |
+| Soltar `⌘⌥W` | Detiene grabación — icono `⏳` — transcribe, traduce (si activo) y pega |
 | Presionar `⌘⌥R` (sin audio) | Reproduce la última respuesta TTS |
 | Presionar `⌘⌥R` (con audio) | Para la reproducción en curso |
+| Presionar `⌘⌥V` | Muestra modal con el último texto TTS |
 
 El clipboard original se restaura automáticamente 300ms después de pegar.
-
-### Menú de estado
-
-```
-whisperwlopezob
-─────────────────────────────────────────────────────────────
-Mantén ⌘⌥W para grabar / suelta para transcribir  ·  ⌘⌥R reproducir o parar última respuesta
-─────────────────────────────────────────────────────────────
-✅ whisper-cli: /opt/homebrew/bin/whisper-cli
-✅ Modelo: ggml-large-v3.bin
-─────────────────────────────────────────────────────────────
-Idioma
-  ✓ Español
-    English
-─────────────────────────────────────────────────────────────
-Configuración...
-─────────────────────────────────────────────────────────────
-Ver log
-Salir
-```
 
 ---
 
 ## Ventana de configuración
 
-Panel nativo macOS con scroll vertical que agrupa todas las opciones:
+Panel nativo macOS con scroll vertical. Secciones en orden de flujo:
 
-### Lectura de respuestas (TTS)
+### AZURE MAI TRANSCRIBE
 
 | Campo | Descripción |
 |-------|-------------|
-| Activar lectura | Habilita la síntesis de voz con Gemini TTS |
-| Gemini API Key | Clave de Google Gemini |
+| Backend | `Whisper local` (whisper-cli) o `Azure MAI` |
+| API Key | Clave de Azure Cognitive Services |
+| Región | Región de Azure (ej: `eastus`) |
+| API Version | Versión de la API (default: `2025-10-15`) |
+| Definition JSON | Configuración del modelo (default: `mai-transcribe-1.5` con enhanced mode) |
+
+### TRADUCCIÓN
+
+| Campo | Descripción |
+|-------|-------------|
+| Activar traducción | Habilita traducción automática post-transcripción |
+| Idioma destino | `Español` o `English` |
+
+Usa las mismas credenciales de Azure MAI. Si el idioma detectado ya es el destino, se salta la llamada.
+
+### LECTURA DE RESPUESTAS
+
+| Campo | Descripción |
+|-------|-------------|
+| Leer respuestas de Claude | Habilita síntesis de voz con Gemini TTS |
+| Clave Gemini | API key de Google Gemini (usada para TTS y formatter) |
+| Formatear respuesta para voz | Pre-procesa con `gemini-3.1-flash-lite` antes de sintetizar |
+| Prompt TTS | Instrucciones para el formatter (configurable) |
 | Voz | Nombre de voz Gemini (default: `Sulafat`) |
-| Scene | Descripción del estilo de narración |
-| Sample Context | Contexto de la conversación para el director's note |
-
-**Formatear respuesta para voz** — si está activo, antes de sintetizar la respuesta pasa por `gemini-3.1-flash-lite` que la convierte a prosa natural (elimina código, markdown, listas). El prompt es configurable.
-
-### Transcripción
-
-- **Backend**: local (whisper-cli) o Azure MAI Transcribe
-- Para Azure MAI: API Key, Region, API Version, Definition JSON
-
-### Mejora gramatical
-
-- Corrección automática con LLM local tras transcribir
-- Prompt configurable por idioma (español / inglés)
-
-### Traducción
-
-- Traduce el texto transcrito al idioma destino configurado
+| Vel | Velocidad de reproducción afplay (default: `1.0`) |
+| Escena | Director's note: estilo de narración para Gemini TTS |
+| Contexto | Contexto de la conversación para Gemini TTS |
+| Mostrar texto al leer (`⌘⌥V`) | Muestra modal con el texto antes de reproducirlo |
 
 ---
 
@@ -203,11 +199,12 @@ Panel nativo macOS con scroll vertical que agrupa todas las opciones:
 
 Al terminar cada respuesta, Claude Code / Codex ejecuta automáticamente `whisper-tts` que:
 
-1. Extrae el último par usuario/asistente del transcript
-2. (Opcional) Formatea la respuesta con `gemini-3.1-flash-lite` para que suene natural
-3. Sintetiza con Gemini TTS (`gemini-3.1-flash-tts-preview`)
-4. Reproduce el audio con `afplay`
-5. Guarda el audio en `~/.config/whisperwlopezob/audio/last-tts.wav`
+1. Recibe el par `{user, assistant}` por stdin
+2. Comprueba si `tts_enabled` está activo en la DB
+3. (Opcional) Formatea con `gemini-3.1-flash-lite` si el texto tiene código, markdown o listas
+4. Sintetiza con Gemini TTS (`gemini-3.1-flash-tts-preview`)
+5. Reproduce con `afplay` (respetando la velocidad configurada)
+6. Guarda el audio en `audio/last-tts.wav` y el texto en `audio/last-tts-text.txt`
 
 ### Hook para Claude Code
 
@@ -226,15 +223,6 @@ Config en `~/.claude/settings.json`:
 
 Instalado automáticamente por `bundle.sh` en `~/.codex/hooks/whisper-tts-stop.sh`.
 
-Config en `~/.codex/hooks.json`:
-```json
-{
-  "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "/Users/<user>/.codex/hooks/whisper-tts-stop.sh", "timeout": 30 }] }]
-  }
-}
-```
-
 ### Prueba manual del hook
 
 ```bash
@@ -252,13 +240,13 @@ tail -20 ~/.config/whisperwlopezob/whisperwlopezob.log
 src/
 ├── main.rs              — Event loop (winit), tray icon, coordinador principal
 ├── lib.rs               — Declaración de módulos
-├── config.rs            — Auto-detección de whisper-cli, CLI LLM y modelos
+├── config.rs            — Auto-detección de whisper-cli y modelos
 ├── defaults.rs          — Constantes y valores por defecto
-├── hotkey.rs            — Hotkeys globales: ⌘⌥W (grabar) y ⌘⌥R (repetir TTS)
+├── hotkey.rs            — Hotkeys globales: ⌘⌥W, ⌘⌥R, ⌘⌥V
 ├── recorder.rs          — Grabación de audio (cpal + hound, 16kHz mono PCM)
 ├── transcriber.rs       — Invocación de whisper-cli con timeout 60s
-├── azure_transcriber.rs — Backend Azure MAI Transcribe
-├── llm.rs               — Corrección gramatical y traducción con CLI LLM
+├── azure_transcriber.rs — Backend Azure MAI Transcribe (mai-transcribe-1.5)
+├── translator.rs        — Traducción Azure Translator v3 con auto-detección
 ├── formatter.rs         — Formateador Gemini Flash Lite para TTS
 ├── tts/
 │   ├── mod.rs           — Orquestador TTS, PID management, replay path
@@ -278,22 +266,22 @@ src/bin/
 ```
 ⌘⌥W (hold) → Recorder::start()
 ⌘⌥W (release) → Recorder::stop() → WAV en /tmp/
-  └─▶ transcriber::transcribe()    (whisper-cli local)
-   OR azure_transcriber::transcribe() (Azure MAI)
-  └─▶ [llm::correct_grammar()]     si activo
-  └─▶ [llm::translate_text()]      si activo
-  └─▶ paste_text()                 simula ⌘V
+  └─▶ transcriber::transcribe()       (whisper-cli local)
+   OR azure_transcriber::transcribe() (Azure MAI Transcribe)
+  └─▶ [translator::translate()]       si activo y detected_lang ≠ dest_lang
+  └─▶ paste_text()                    simula ⌘V
 ```
 
 **Flujo de lectura de respuestas:**
 
 ```
-Claude / Codex termina respuesta
+Claude Code / Codex termina respuesta
   └─▶ Stop hook → whisper-tts (stdin: {user, assistant})
-  └─▶ [GeminiFormatter]           si formatter activo
+  └─▶ [GeminiFormatter]               si formatter activo y texto lo requiere
   └─▶ GeminiProvider::synthesize()
-  └─▶ afplay audio.wav
-  └─▶ guarda audio/last-tts.wav   (⌘⌥R para repetir)
+  └─▶ afplay audio.wav                (velocidad configurable)
+  └─▶ guarda last-tts.wav + last-tts-text.txt
+  └─▶ [modal osascript]               si show_modal activo
 ```
 
 ---
@@ -302,21 +290,22 @@ Claude / Codex termina respuesta
 
 | Clave | Valores | Default |
 |-------|---------|---------|
-| `language` | `"es"` \| `"en"` | `"es"` |
-| `llm_enabled` | `"true"` \| `"false"` | `"false"` |
-| `llm_model` | nombre `.gguf` | `""` |
 | `translate_enabled` | `"true"` \| `"false"` | `"false"` |
 | `translate_dest_lang` | `"es"` \| `"en"` | `"es"` |
 | `azure_mai_enabled` | `"true"` \| `"false"` | `"false"` |
 | `azure_mai_key` | string | `""` |
 | `azure_mai_region` | string | `""` |
+| `azure_mai_api_version` | string | `"2025-10-15"` |
+| `azure_mai_definition` | JSON string | `{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}` |
 | `tts_enabled` | `"true"` \| `"false"` | `"false"` |
-| `tts_voice` | nombre de voz Gemini | `"Sulafat"` |
 | `gemini_api_key` | string | `""` |
+| `tts_voice` | nombre de voz Gemini | `"Sulafat"` |
+| `tts_playback_rate` | float string | `"1.0"` |
 | `tts_scene` | string | (descripción bilingual) |
 | `tts_sample_context` | string | (contexto conversacional) |
 | `tts_formatter_enabled` | `"true"` \| `"false"` | `"false"` |
-| `tts_formatter_prompt` | string | (8 reglas de formato) |
+| `tts_formatter_prompt` | string | (7 reglas de formato) |
+| `tts_show_modal` | `"true"` \| `"false"` | `"false"` |
 
 ---
 
@@ -331,10 +320,14 @@ Claude / Codex termina respuesta
 - Requiere que TTS esté activado y que haya habido al menos una respuesta leída
 
 **TTS no se activa al terminar respuesta de Claude/Codex**
-- Verifica que TTS esté habilitado en Configuración
+- Verifica que `tts_enabled = true` en Configuración
 - Verifica que haya una Gemini API Key configurada
 - Revisa el log: `tail -20 ~/.config/whisperwlopezob/whisperwlopezob.log`
-- Prueba el binario manualmente (ver sección anterior)
+- Prueba el binario manualmente con el comando de la sección anterior
+
+**La traducción no funciona**
+- Requiere Azure MAI configurado (reutiliza la misma API Key y región)
+- Verifica que `translate_enabled = true` y el idioma destino esté configurado
 
 **El texto no se pega**
 - Habilita Accessibility (necesario para simular `⌘V`)
@@ -343,4 +336,4 @@ Claude / Codex termina respuesta
 
 **`❌ Modelo no encontrado`** → descarga un `.bin` en `~/.config/whisperwlopezob/whisper-models/`
 
-**La transcripción tarda mucho** → usa un modelo más pequeño (`ggml-base.bin`)
+**La transcripción tarda mucho** → usa Azure MAI (más rápido) o un modelo más pequeño (`ggml-base.bin`)

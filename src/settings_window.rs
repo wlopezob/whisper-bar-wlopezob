@@ -13,11 +13,6 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 pub struct SettingsValues {
-    pub language: String,
-    pub grammar_enabled: bool,
-    pub grammar_model: String,
-    pub grammar_prompt_es: String,
-    pub grammar_prompt_en: String,
     pub translate_enabled: bool,
     pub translate_dest: String,
     // Azure MAI Transcribe
@@ -156,10 +151,7 @@ fn input_field(
 
 // ── API pública ───────────────────────────────────────────────────────────────
 
-pub fn show_settings_modal(
-    current: &SettingsValues,
-    available_models: &[String],
-) -> Option<SettingsValues> {
+pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
 
@@ -191,26 +183,10 @@ pub fn show_settings_modal(
     scroll_settings.setHasVerticalScroller(true);
     scroll_settings.setHasHorizontalScroller(false);
 
-    // Vista de contenido de 1290px — mismos y-coords que antes
     let content = NSView::initWithFrame(
         NSView::alloc(mtm),
-        rect(0.0, 0.0, 420.0, 1290.0),
+        rect(0.0, 0.0, 420.0, 1210.0),
     );
-
-    // ── TRANSCRIPCIÓN ─────────────────────────────────────────────────────────
-    content.addSubview(&section_header("TRANSCRIPCIÓN", 20.0, 1230.0, mtm));
-    content.addSubview(&label("Idioma:", 20.0, 1205.0, 60.0, mtm));
-
-    let seg_lang = NSSegmentedControl::initWithFrame(
-        NSSegmentedControl::alloc(mtm),
-        rect(80.0, 1200.0, 210.0, 26.0),
-    );
-    seg_lang.setSegmentCount(2);
-    seg_lang.setLabel_forSegment(&NSString::from_str("Español"), 0);
-    seg_lang.setLabel_forSegment(&NSString::from_str("English"), 1);
-    seg_lang.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
-    seg_lang.setSelectedSegment(if current.language == "es" { 0 } else { 1 });
-    content.addSubview(&seg_lang);
 
     // ── AZURE MAI TRANSCRIBE ──────────────────────────────────────────────────
     content.addSubview(&section_header("AZURE MAI TRANSCRIBE", 20.0, 1158.0, mtm));
@@ -291,82 +267,8 @@ pub fn show_settings_modal(
         set_azure_fields_hidden(true);
     }
 
-    // ── MEJORA GRAMATICAL ─────────────────────────────────────────────────────
-    content.addSubview(&section_header("MEJORA GRAMATICAL", 20.0, 838.0, mtm));
-
-    let chk_grammar = unsafe {
-        NSButton::checkboxWithTitle_target_action(
-            &NSString::from_str("Activar mejora gramatical"),
-            None,
-            None,
-            mtm,
-        )
-    };
-    chk_grammar.setFrame(rect(20.0, 811.0, 280.0, 22.0));
-    chk_grammar.setState(if current.grammar_enabled {
-        NSControlStateValueOn
-    } else {
-        NSControlStateValueOff
-    });
-    content.addSubview(&chk_grammar);
-
-    content.addSubview(&label("Modelo:", 20.0, 781.0, 60.0, mtm));
-    let popup_model = NSPopUpButton::initWithFrame_pullsDown(
-        NSPopUpButton::alloc(mtm),
-        rect(85.0, 778.0, 295.0, 26.0),
-        false,
-    );
-    if available_models.is_empty() {
-        popup_model.addItemWithTitle(&NSString::from_str("(sin modelos)"));
-    } else {
-        popup_model.addItemWithTitle(&NSString::from_str("— seleccionar modelo —"));
-        for m in available_models {
-            popup_model.addItemWithTitle(&NSString::from_str(m));
-        }
-        if !current.grammar_model.is_empty() {
-            popup_model.selectItemWithTitle(&NSString::from_str(&current.grammar_model));
-        }
-    }
-    content.addSubview(&popup_model);
-
-    content.addSubview(&label("Prompt ES:", 20.0, 751.0, 120.0, mtm));
-    let scroll_prompt_es = NSScrollView::initWithFrame(
-        NSScrollView::alloc(mtm),
-        rect(20.0, 686.0, 380.0, 62.0),
-    );
-    scroll_prompt_es.setHasVerticalScroller(true);
-    scroll_prompt_es.setHasHorizontalScroller(false);
-    let txt_prompt_es = NSTextView::initWithFrame(
-        NSTextView::alloc(mtm),
-        rect(0.0, 0.0, 380.0, 62.0),
-    );
-    txt_prompt_es.setEditable(true);
-    txt_prompt_es.setSelectable(true);
-    txt_prompt_es.setRichText(false);
-    txt_prompt_es.setString(&NSString::from_str(&current.grammar_prompt_es));
-    scroll_prompt_es.setDocumentView(Some(txt_prompt_es.as_ref()));
-    content.addSubview(&scroll_prompt_es);
-
-    content.addSubview(&label("Prompt EN:", 20.0, 659.0, 120.0, mtm));
-    let scroll_prompt_en = NSScrollView::initWithFrame(
-        NSScrollView::alloc(mtm),
-        rect(20.0, 594.0, 380.0, 62.0),
-    );
-    scroll_prompt_en.setHasVerticalScroller(true);
-    scroll_prompt_en.setHasHorizontalScroller(false);
-    let txt_prompt_en = NSTextView::initWithFrame(
-        NSTextView::alloc(mtm),
-        rect(0.0, 0.0, 380.0, 62.0),
-    );
-    txt_prompt_en.setEditable(true);
-    txt_prompt_en.setSelectable(true);
-    txt_prompt_en.setRichText(false);
-    txt_prompt_en.setString(&NSString::from_str(&current.grammar_prompt_en));
-    scroll_prompt_en.setDocumentView(Some(txt_prompt_en.as_ref()));
-    content.addSubview(&scroll_prompt_en);
-
     // ── TRADUCCIÓN ────────────────────────────────────────────────────────────
-    content.addSubview(&section_header("TRADUCCIÓN", 20.0, 556.0, mtm));
+    content.addSubview(&section_header("TRADUCCIÓN", 20.0, 918.0, mtm));
 
     let chk_translate = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -376,7 +278,7 @@ pub fn show_settings_modal(
             mtm,
         )
     };
-    chk_translate.setFrame(rect(20.0, 529.0, 240.0, 22.0));
+    chk_translate.setFrame(rect(20.0, 891.0, 240.0, 22.0));
     chk_translate.setState(if current.translate_enabled {
         NSControlStateValueOn
     } else {
@@ -384,10 +286,10 @@ pub fn show_settings_modal(
     });
     content.addSubview(&chk_translate);
 
-    content.addSubview(&label("Idioma destino:", 20.0, 499.0, 110.0, mtm));
+    content.addSubview(&label("Idioma destino:", 20.0, 861.0, 110.0, mtm));
     let popup_dest = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(135.0, 496.0, 140.0, 26.0),
+        rect(135.0, 858.0, 140.0, 26.0),
         false,
     );
     popup_dest.addItemWithTitle(&NSString::from_str("Español"));
@@ -402,7 +304,7 @@ pub fn show_settings_modal(
     content.addSubview(&popup_dest);
 
     // ── LECTURA DE RESPUESTAS (TTS) — siempre visible ─────────────────────────
-    content.addSubview(&section_header("LECTURA DE RESPUESTAS", 20.0, 460.0, mtm));
+    content.addSubview(&section_header("LECTURA DE RESPUESTAS", 20.0, 822.0, mtm));
 
     let chk_tts = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -412,7 +314,7 @@ pub fn show_settings_modal(
             mtm,
         )
     };
-    chk_tts.setFrame(rect(20.0, 430.0, 280.0, 22.0));
+    chk_tts.setFrame(rect(20.0, 792.0, 280.0, 22.0));
     chk_tts.setState(if current.tts_enabled {
         NSControlStateValueOn
     } else {
@@ -420,33 +322,74 @@ pub fn show_settings_modal(
     });
     content.addSubview(&chk_tts);
 
-    content.addSubview(&label("Clave Gemini:", 20.0, 400.0, 90.0, mtm));
+    content.addSubview(&label("Clave Gemini:", 20.0, 762.0, 90.0, mtm));
     let gemini_key_initial = current.gemini_api_key.as_str();
-    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 397.0, 285.0, mtm);
+    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 759.0, 285.0, mtm);
     content.addSubview(&tf_gemini_key);
 
-    content.addSubview(&label("Voz:", 20.0, 364.0, 35.0, mtm));
+    // ── Formatter (paso 1 del pipeline: preprocesa el texto antes de TTS) ─────
+    let chk_formatter = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &NSString::from_str("Formatear respuesta para voz"),
+            None,
+            None,
+            mtm,
+        )
+    };
+    chk_formatter.setFrame(rect(20.0, 726.0, 280.0, 22.0));
+    chk_formatter.setState(if current.tts_formatter_enabled {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
+    content.addSubview(&chk_formatter);
+
+    content.addSubview(&label("Prompt TTS:", 20.0, 700.0, 80.0, mtm));
+    let scroll_formatter_prompt = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        rect(20.0, 642.0, 380.0, 55.0),
+    );
+    scroll_formatter_prompt.setHasVerticalScroller(true);
+    scroll_formatter_prompt.setHasHorizontalScroller(false);
+    let txt_formatter_prompt = NSTextView::initWithFrame(
+        NSTextView::alloc(mtm),
+        rect(0.0, 0.0, 380.0, 55.0),
+    );
+    txt_formatter_prompt.setEditable(true);
+    txt_formatter_prompt.setSelectable(true);
+    txt_formatter_prompt.setRichText(false);
+    let formatter_prompt_initial = if current.tts_formatter_prompt.is_empty() {
+        crate::defaults::FORMATTER_DEFAULT_PROMPT
+    } else {
+        &current.tts_formatter_prompt
+    };
+    txt_formatter_prompt.setString(&NSString::from_str(formatter_prompt_initial));
+    scroll_formatter_prompt.setDocumentView(Some(txt_formatter_prompt.as_ref()));
+    content.addSubview(&scroll_formatter_prompt);
+
+    // ── Voz / Velocidad ───────────────────────────────────────────────────────
+    content.addSubview(&label("Voz:", 20.0, 612.0, 35.0, mtm));
     let tts_voice_initial = if current.tts_voice.is_empty() {
         crate::defaults::TTS_DEFAULT_VOICE
     } else {
         &current.tts_voice
     };
-    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 361.0, 200.0, mtm);
+    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 609.0, 200.0, mtm);
     content.addSubview(&tf_tts_voice);
 
-    content.addSubview(&label("Vel:", 268.0, 364.0, 30.0, mtm));
+    content.addSubview(&label("Vel:", 268.0, 612.0, 30.0, mtm));
     let rate_initial = if current.tts_playback_rate.is_empty() {
         crate::defaults::TTS_DEFAULT_PLAYBACK_RATE
     } else {
         &current.tts_playback_rate
     };
-    let tf_tts_rate = input_field(rate_initial, 300.0, 361.0, 100.0, mtm);
+    let tf_tts_rate = input_field(rate_initial, 300.0, 609.0, 100.0, mtm);
     content.addSubview(&tf_tts_rate);
 
-    content.addSubview(&label("Escena:", 20.0, 333.0, 55.0, mtm));
+    content.addSubview(&label("Escena:", 20.0, 582.0, 55.0, mtm));
     let scroll_tts_scene = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 263.0, 380.0, 67.0),
+        rect(20.0, 512.0, 380.0, 67.0),
     );
     scroll_tts_scene.setHasVerticalScroller(true);
     scroll_tts_scene.setHasHorizontalScroller(false);
@@ -466,10 +409,10 @@ pub fn show_settings_modal(
     scroll_tts_scene.setDocumentView(Some(txt_tts_scene.as_ref()));
     content.addSubview(&scroll_tts_scene);
 
-    content.addSubview(&label("Contexto:", 20.0, 238.0, 65.0, mtm));
+    content.addSubview(&label("Contexto:", 20.0, 487.0, 65.0, mtm));
     let scroll_tts_context = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 168.0, 380.0, 67.0),
+        rect(20.0, 417.0, 380.0, 67.0),
     );
     scroll_tts_context.setHasVerticalScroller(true);
     scroll_tts_context.setHasHorizontalScroller(false);
@@ -498,53 +441,13 @@ pub fn show_settings_modal(
             mtm,
         )
     };
-    chk_show_modal.setFrame(rect(20.0, 136.0, 280.0, 22.0));
+    chk_show_modal.setFrame(rect(20.0, 385.0, 280.0, 22.0));
     chk_show_modal.setState(if current.tts_show_modal {
         NSControlStateValueOn
     } else {
         NSControlStateValueOff
     });
     content.addSubview(&chk_show_modal);
-
-    // ── Formatter LLM (Gemini 3.1 Flash Lite) ────────────────────────────────
-    let chk_formatter = unsafe {
-        NSButton::checkboxWithTitle_target_action(
-            &NSString::from_str("Formatear respuesta para voz"),
-            None,
-            None,
-            mtm,
-        )
-    };
-    chk_formatter.setFrame(rect(20.0, 106.0, 280.0, 22.0));
-    chk_formatter.setState(if current.tts_formatter_enabled {
-        NSControlStateValueOn
-    } else {
-        NSControlStateValueOff
-    });
-    content.addSubview(&chk_formatter);
-
-    content.addSubview(&label("Prompt TTS:", 20.0, 83.0, 80.0, mtm));
-    let scroll_formatter_prompt = NSScrollView::initWithFrame(
-        NSScrollView::alloc(mtm),
-        rect(20.0, 25.0, 380.0, 55.0),
-    );
-    scroll_formatter_prompt.setHasVerticalScroller(true);
-    scroll_formatter_prompt.setHasHorizontalScroller(false);
-    let txt_formatter_prompt = NSTextView::initWithFrame(
-        NSTextView::alloc(mtm),
-        rect(0.0, 0.0, 380.0, 55.0),
-    );
-    txt_formatter_prompt.setEditable(true);
-    txt_formatter_prompt.setSelectable(true);
-    txt_formatter_prompt.setRichText(false);
-    let formatter_prompt_initial = if current.tts_formatter_prompt.is_empty() {
-        crate::defaults::FORMATTER_DEFAULT_PROMPT
-    } else {
-        &current.tts_formatter_prompt
-    };
-    txt_formatter_prompt.setString(&NSString::from_str(formatter_prompt_initial));
-    scroll_formatter_prompt.setDocumentView(Some(txt_formatter_prompt.as_ref()));
-    content.addSubview(&scroll_formatter_prompt);
 
     // ── Montar content en scroll y scroll en panel ────────────────────────────
     scroll_settings.setDocumentView(Some(&content));
@@ -553,8 +456,8 @@ pub fn show_settings_modal(
     // Scroll inicial: mostrar la parte de arriba (TRANSCRIPCIÓN, y=1230 en content)
     unsafe {
         let clip: *mut AnyObject = msg_send![&*scroll_settings, contentView];
-        // top_y = content_height(1260) - visible_height(665) = 595
-        let _: () = msg_send![clip, scrollToPoint: NSPoint::new(0.0, 595.0_f64)];
+        // top_y = content_height(1210) - visible_height(665) = 545
+        let _: () = msg_send![clip, scrollToPoint: NSPoint::new(0.0, 545.0_f64)];
         let _: () = msg_send![&*scroll_settings, reflectScrolledClipView: clip];
     }
 
@@ -613,33 +516,12 @@ pub fn show_settings_modal(
     }
 
     // ── Leer estado de los controles ──────────────────────────────────────────
-    let language = if seg_lang.selectedSegment() == 0 { "es" } else { "en" }.to_string();
-
     let azure_mai_enabled = seg_backend.selectedSegment() == 1;
     let azure_mai_key = tf_key.stringValue().to_string().trim().to_string();
     let azure_mai_region = tf_region.stringValue().to_string().trim().to_string();
     let azure_mai_model = String::new(); // campo eliminado de UI; modelo va dentro de definition JSON
     let azure_mai_api_version = tf_api_version.stringValue().to_string().trim().to_string();
     let azure_mai_definition = txt_definition.string().to_string().trim().to_string();
-
-    let grammar_enabled = chk_grammar.state() == NSControlStateValueOn;
-
-    let grammar_model = if available_models.is_empty() {
-        String::new()
-    } else {
-        let title = popup_model
-            .titleOfSelectedItem()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        if title == "— seleccionar modelo —" {
-            String::new()
-        } else {
-            title
-        }
-    };
-
-    let grammar_prompt_es = txt_prompt_es.string().to_string().trim().to_string();
-    let grammar_prompt_en = txt_prompt_en.string().to_string().trim().to_string();
 
     let translate_enabled = chk_translate.state() == NSControlStateValueOn;
 
@@ -681,11 +563,6 @@ pub fn show_settings_modal(
     let tts_show_modal = chk_show_modal.state() == NSControlStateValueOn;
 
     Some(SettingsValues {
-        language,
-        grammar_enabled,
-        grammar_model,
-        grammar_prompt_es,
-        grammar_prompt_en,
         translate_enabled,
         translate_dest,
         azure_mai_enabled,
