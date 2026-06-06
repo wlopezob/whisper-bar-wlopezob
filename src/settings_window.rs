@@ -15,6 +15,8 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 pub struct SettingsValues {
     pub translate_enabled: bool,
     pub translate_dest: String,
+    pub translate_provider: String,
+    pub translate_ollama_prompt: String,
     // Azure MAI Transcribe
     pub azure_mai_enabled: bool,
     pub azure_mai_key: String,
@@ -82,6 +84,33 @@ fn set_azure_fields_hidden(hidden: bool) {
     });
 }
 
+// ── Thread-local: referencias al prompt Ollama para show/hide ────────────────
+
+#[derive(Copy, Clone)]
+struct OllamaPromptPtrs {
+    lbl_prompt: *const NSTextField,
+    scroll_prompt: *const NSScrollView,
+}
+
+unsafe impl Send for OllamaPromptPtrs {}
+unsafe impl Sync for OllamaPromptPtrs {}
+
+thread_local! {
+    static OLLAMA_PROMPT_FIELDS: std::cell::RefCell<Option<OllamaPromptPtrs>> =
+        std::cell::RefCell::new(None);
+}
+
+fn set_ollama_prompt_hidden(hidden: bool) {
+    OLLAMA_PROMPT_FIELDS.with(|cell| {
+        if let Some(ptrs) = *cell.borrow() {
+            unsafe {
+                let _: () = msg_send![&*ptrs.lbl_prompt, setHidden: hidden];
+                let _: () = msg_send![&*ptrs.scroll_prompt, setHidden: hidden];
+            }
+        }
+    });
+}
+
 // ── Delegate: Aplicar / Cancelar + toggle de sección Azure ───────────────────
 define_class!(
     #[unsafe(super(NSObject))]
@@ -108,6 +137,16 @@ define_class!(
         fn backend_changed(&self, sender: &NSSegmentedControl) {
             let show_azure = sender.selectedSegment() == 1;
             set_azure_fields_hidden(!show_azure);
+        }
+
+        /// Llamado cuando el usuario cambia el proveedor de traducción
+        #[unsafe(method(providerChanged:))]
+        fn provider_changed(&self, sender: &NSPopUpButton) {
+            let is_ollama = sender
+                .titleOfSelectedItem()
+                .map(|s| s.to_string().contains("Ollama"))
+                .unwrap_or(false);
+            set_ollama_prompt_hidden(!is_ollama);
         }
     }
 );
@@ -286,25 +325,72 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_translate);
 
-    content.addSubview(&label("Idioma destino:", 20.0, 861.0, 110.0, mtm));
+    content.addSubview(&label("Proveedor:", 20.0, 862.0, 75.0, mtm));
+    let popup_provider = NSPopUpButton::initWithFrame_pullsDown(
+        NSPopUpButton::alloc(mtm),
+        rect(100.0, 859.0, 210.0, 26.0),
+        false,
+    );
+    popup_provider.addItemWithTitle(&NSString::from_str("Microsoft Translator"));
+    popup_provider.addItemWithTitle(&NSString::from_str("Ollama (gemma4:e4b)"));
+    popup_provider.selectItemWithTitle(&NSString::from_str(
+        if current.translate_provider == "ollama" { "Ollama (gemma4:e4b)" } else { "Microsoft Translator" },
+    ));
+    unsafe {
+        popup_provider.setTarget(Some(delegate_obj));
+        popup_provider.setAction(Some(sel!(providerChanged:)));
+    }
+    content.addSubview(&popup_provider);
+
+    content.addSubview(&label("Idioma destino:", 20.0, 828.0, 110.0, mtm));
     let popup_dest = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
-        rect(135.0, 858.0, 140.0, 26.0),
+        rect(135.0, 825.0, 140.0, 26.0),
         false,
     );
     popup_dest.addItemWithTitle(&NSString::from_str("Español"));
     popup_dest.addItemWithTitle(&NSString::from_str("English"));
     popup_dest.selectItemWithTitle(&NSString::from_str(
-        if current.translate_dest == "es" {
-            "Español"
-        } else {
-            "English"
-        },
+        if current.translate_dest == "es" { "Español" } else { "English" },
     ));
     content.addSubview(&popup_dest);
 
+    let scroll_translate_prompt = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        rect(20.0, 736.0, 380.0, 57.0),
+    );
+    scroll_translate_prompt.setHasVerticalScroller(true);
+    scroll_translate_prompt.setHasHorizontalScroller(false);
+    let txt_translate_prompt = NSTextView::initWithFrame(
+        NSTextView::alloc(mtm),
+        rect(0.0, 0.0, 380.0, 57.0),
+    );
+    txt_translate_prompt.setEditable(true);
+    txt_translate_prompt.setSelectable(true);
+    txt_translate_prompt.setRichText(false);
+    let ollama_prompt_initial = if current.translate_ollama_prompt.is_empty() {
+        crate::defaults::TRANSLATE_OLLAMA_DEFAULT_PROMPT
+    } else {
+        &current.translate_ollama_prompt
+    };
+    txt_translate_prompt.setString(&NSString::from_str(ollama_prompt_initial));
+    scroll_translate_prompt.setDocumentView(Some(txt_translate_prompt.as_ref()));
+    content.addSubview(&scroll_translate_prompt);
+
+    // Registrar punteros para show/hide del prompt Ollama
+    let lbl_translate_prompt = label("Prompt Ollama:", 20.0, 796.0, 105.0, mtm);
+    content.addSubview(&lbl_translate_prompt);
+    OLLAMA_PROMPT_FIELDS.with(|cell| {
+        *cell.borrow_mut() = Some(OllamaPromptPtrs {
+            lbl_prompt: &*lbl_translate_prompt as *const NSTextField,
+            scroll_prompt: &*scroll_translate_prompt as *const NSScrollView,
+        });
+    });
+    // Visibilidad inicial: oculto si no es Ollama
+    set_ollama_prompt_hidden(current.translate_provider != "ollama");
+
     // ── LECTURA DE RESPUESTAS (TTS) — siempre visible ─────────────────────────
-    content.addSubview(&section_header("LECTURA DE RESPUESTAS", 20.0, 822.0, mtm));
+    content.addSubview(&section_header("LECTURA DE RESPUESTAS", 20.0, 702.0, mtm));
 
     let chk_tts = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -314,7 +400,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             mtm,
         )
     };
-    chk_tts.setFrame(rect(20.0, 792.0, 280.0, 22.0));
+    chk_tts.setFrame(rect(20.0, 672.0, 280.0, 22.0));
     chk_tts.setState(if current.tts_enabled {
         NSControlStateValueOn
     } else {
@@ -322,9 +408,9 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_tts);
 
-    content.addSubview(&label("Clave Gemini:", 20.0, 762.0, 90.0, mtm));
+    content.addSubview(&label("Clave Gemini:", 20.0, 642.0, 90.0, mtm));
     let gemini_key_initial = current.gemini_api_key.as_str();
-    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 759.0, 285.0, mtm);
+    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 639.0, 285.0, mtm);
     content.addSubview(&tf_gemini_key);
 
     // ── Formatter (paso 1 del pipeline: preprocesa el texto antes de TTS) ─────
@@ -336,7 +422,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             mtm,
         )
     };
-    chk_formatter.setFrame(rect(20.0, 726.0, 280.0, 22.0));
+    chk_formatter.setFrame(rect(20.0, 606.0, 280.0, 22.0));
     chk_formatter.setState(if current.tts_formatter_enabled {
         NSControlStateValueOn
     } else {
@@ -344,10 +430,10 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_formatter);
 
-    content.addSubview(&label("Prompt TTS:", 20.0, 700.0, 80.0, mtm));
+    content.addSubview(&label("Prompt TTS:", 20.0, 580.0, 80.0, mtm));
     let scroll_formatter_prompt = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 642.0, 380.0, 55.0),
+        rect(20.0, 522.0, 380.0, 55.0),
     );
     scroll_formatter_prompt.setHasVerticalScroller(true);
     scroll_formatter_prompt.setHasHorizontalScroller(false);
@@ -368,28 +454,28 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     content.addSubview(&scroll_formatter_prompt);
 
     // ── Voz / Velocidad ───────────────────────────────────────────────────────
-    content.addSubview(&label("Voz:", 20.0, 612.0, 35.0, mtm));
+    content.addSubview(&label("Voz:", 20.0, 492.0, 35.0, mtm));
     let tts_voice_initial = if current.tts_voice.is_empty() {
         crate::defaults::TTS_DEFAULT_VOICE
     } else {
         &current.tts_voice
     };
-    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 609.0, 200.0, mtm);
+    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 489.0, 200.0, mtm);
     content.addSubview(&tf_tts_voice);
 
-    content.addSubview(&label("Vel:", 268.0, 612.0, 30.0, mtm));
+    content.addSubview(&label("Vel:", 268.0, 492.0, 30.0, mtm));
     let rate_initial = if current.tts_playback_rate.is_empty() {
         crate::defaults::TTS_DEFAULT_PLAYBACK_RATE
     } else {
         &current.tts_playback_rate
     };
-    let tf_tts_rate = input_field(rate_initial, 300.0, 609.0, 100.0, mtm);
+    let tf_tts_rate = input_field(rate_initial, 300.0, 489.0, 100.0, mtm);
     content.addSubview(&tf_tts_rate);
 
-    content.addSubview(&label("Escena:", 20.0, 582.0, 55.0, mtm));
+    content.addSubview(&label("Escena:", 20.0, 462.0, 55.0, mtm));
     let scroll_tts_scene = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 512.0, 380.0, 67.0),
+        rect(20.0, 392.0, 380.0, 67.0),
     );
     scroll_tts_scene.setHasVerticalScroller(true);
     scroll_tts_scene.setHasHorizontalScroller(false);
@@ -409,10 +495,10 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     scroll_tts_scene.setDocumentView(Some(txt_tts_scene.as_ref()));
     content.addSubview(&scroll_tts_scene);
 
-    content.addSubview(&label("Contexto:", 20.0, 487.0, 65.0, mtm));
+    content.addSubview(&label("Contexto:", 20.0, 367.0, 65.0, mtm));
     let scroll_tts_context = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 417.0, 380.0, 67.0),
+        rect(20.0, 297.0, 380.0, 67.0),
     );
     scroll_tts_context.setHasVerticalScroller(true);
     scroll_tts_context.setHasHorizontalScroller(false);
@@ -441,7 +527,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             mtm,
         )
     };
-    chk_show_modal.setFrame(rect(20.0, 385.0, 280.0, 22.0));
+    chk_show_modal.setFrame(rect(20.0, 265.0, 280.0, 22.0));
     chk_show_modal.setState(if current.tts_show_modal {
         NSControlStateValueOn
     } else {
@@ -508,8 +594,9 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
 
     panel.orderOut(None);
 
-    // Limpiar referencias del thread_local
+    // Limpiar referencias de thread_locals
     AZURE_FIELDS.with(|cell| { *cell.borrow_mut() = None; });
+    OLLAMA_PROMPT_FIELDS.with(|cell| { *cell.borrow_mut() = None; });
 
     if response != NSModalResponseOK {
         return None;
@@ -525,16 +612,24 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
 
     let translate_enabled = chk_translate.state() == NSControlStateValueOn;
 
+    let translate_provider = popup_provider
+        .titleOfSelectedItem()
+        .map(|s| {
+            if s.to_string().contains("Ollama") { "ollama".to_string() } else { "azure".to_string() }
+        })
+        .unwrap_or_else(|| "azure".to_string());
+
     let translate_dest = popup_dest
         .titleOfSelectedItem()
         .map(|s| {
-            if s.to_string() == "Español" {
-                "es".to_string()
-            } else {
-                "en".to_string()
-            }
+            if s.to_string() == "Español" { "es".to_string() } else { "en".to_string() }
         })
         .unwrap_or_else(|| "es".to_string());
+
+    let translate_ollama_prompt = {
+        let v = txt_translate_prompt.string().to_string().trim().to_string();
+        if v.is_empty() { crate::defaults::TRANSLATE_OLLAMA_DEFAULT_PROMPT.to_string() } else { v }
+    };
 
     // Leer valores TTS
     let tts_enabled = chk_tts.state() == NSControlStateValueOn;
@@ -565,6 +660,8 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     Some(SettingsValues {
         translate_enabled,
         translate_dest,
+        translate_provider,
+        translate_ollama_prompt,
         azure_mai_enabled,
         azure_mai_key,
         azure_mai_region,

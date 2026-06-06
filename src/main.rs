@@ -46,6 +46,8 @@ struct WhisperApp {
     recorder: Arc<Mutex<Recorder>>,
     translate_enabled: Arc<Mutex<bool>>,
     translate_dest_lang: Arc<Mutex<String>>,
+    translate_provider: Arc<Mutex<String>>,
+    translate_ollama_prompt: Arc<Mutex<String>>,
     // Azure MAI Transcribe
     azure_mai_enabled: Arc<Mutex<bool>>,
     azure_mai_key: Arc<Mutex<String>>,
@@ -85,6 +87,8 @@ impl WhisperApp {
         let db = db::Db::open().expect("No se pudo abrir la base de datos");
         let translate_enabled = db.get("translate_enabled", "false") == "true";
         let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
+        let translate_provider = db.get("translate_provider", defaults::TRANSLATE_DEFAULT_PROVIDER);
+        let translate_ollama_prompt = db.get("translate_ollama_prompt", defaults::TRANSLATE_OLLAMA_DEFAULT_PROMPT);
         let azure_mai_enabled = db.get("azure_mai_enabled", "false") == "true";
         let azure_mai_key = db.get("azure_mai_key", "");
         let azure_mai_region = db.get("azure_mai_region", "");
@@ -140,6 +144,8 @@ impl WhisperApp {
             recorder: Arc::new(Mutex::new(Recorder::new())),
             translate_enabled: Arc::new(Mutex::new(translate_enabled)),
             translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
+            translate_provider: Arc::new(Mutex::new(translate_provider)),
+            translate_ollama_prompt: Arc::new(Mutex::new(translate_ollama_prompt)),
             azure_mai_enabled: Arc::new(Mutex::new(azure_mai_enabled)),
             azure_mai_key: Arc::new(Mutex::new(azure_mai_key)),
             azure_mai_region: Arc::new(Mutex::new(azure_mai_region)),
@@ -288,6 +294,10 @@ impl WhisperApp {
         self.db.set("translate_enabled", if v.translate_enabled { "true" } else { "false" });
         *self.translate_dest_lang.lock().unwrap() = v.translate_dest.clone();
         self.db.set("translate_dest_lang", &v.translate_dest);
+        *self.translate_provider.lock().unwrap() = v.translate_provider.clone();
+        self.db.set("translate_provider", &v.translate_provider);
+        *self.translate_ollama_prompt.lock().unwrap() = v.translate_ollama_prompt.clone();
+        self.db.set("translate_ollama_prompt", &v.translate_ollama_prompt);
 
         // Azure MAI Transcribe
         *self.azure_mai_enabled.lock().unwrap() = v.azure_mai_enabled;
@@ -396,6 +406,8 @@ impl ApplicationHandler for WhisperApp {
                 let current = SettingsValues {
                     translate_enabled: *self.translate_enabled.lock().unwrap(),
                     translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
+                    translate_provider: self.translate_provider.lock().unwrap().clone(),
+                    translate_ollama_prompt: self.translate_ollama_prompt.lock().unwrap().clone(),
                     azure_mai_enabled: *self.azure_mai_enabled.lock().unwrap(),
                     azure_mai_key: self.azure_mai_key.lock().unwrap().clone(),
                     azure_mai_region: self.azure_mai_region.lock().unwrap().clone(),
@@ -444,6 +456,8 @@ impl ApplicationHandler for WhisperApp {
                         &self.azure_mai_definition,
                         &self.translate_enabled,
                         &self.translate_dest_lang,
+                        &self.translate_provider,
+                        &self.translate_ollama_prompt,
                     ),
                 }
             } else if Some(event.id) == self.replay_hotkey_id
@@ -639,6 +653,8 @@ fn handle_hotkey_released(
     azure_mai_definition_ref: &Arc<Mutex<String>>,
     translate_enabled: &Arc<Mutex<bool>>,
     translate_dest_lang: &Arc<Mutex<String>>,
+    translate_provider_ref: &Arc<Mutex<String>>,
+    translate_ollama_prompt_ref: &Arc<Mutex<String>>,
 ) {
     let mut state = app_state.lock().unwrap();
 
@@ -678,6 +694,8 @@ fn handle_hotkey_released(
                     // Traducción
                     let do_translate = *translate_enabled.lock().unwrap();
                     let dest_lang = translate_dest_lang.lock().unwrap().clone();
+                    let translate_provider = translate_provider_ref.lock().unwrap().clone();
+                    let translate_ollama_prompt = translate_ollama_prompt_ref.lock().unwrap().clone();
                     std::thread::spawn(move || {
                         log::info!("🧭 Paso 1: iniciando transcripción");
                         // Elegir backend: Azure MAI o local whisper-cli
@@ -699,21 +717,36 @@ fn handle_hotkey_released(
                                 log::info!("✅ Transcripción: \"{}\"", text);
 
                                 // Paso opcional: traducción
-                                let final_text = if do_translate && !azure_key.is_empty() && !azure_region.is_empty() {
-                                    log::info!("🌐 Traduciendo a '{}'...", dest_lang);
-                                    match translator::translate(&text, &dest_lang, &azure_key, &azure_region) {
-                                        Ok(result) => {
-                                            if result.was_translated {
-                                                log::info!(
-                                                    "✅ Traducción: '{}' → '{}': \"{}\"",
-                                                    result.detected_lang, dest_lang, result.text
-                                                );
+                                let final_text = if do_translate {
+                                    let skip = match translate_provider.as_str() {
+                                        "ollama" => false,
+                                        _ => azure_key.is_empty() || azure_region.is_empty(),
+                                    };
+                                    if skip {
+                                        log::info!("Traducción: credenciales Azure no configuradas, omitiendo");
+                                        text
+                                    } else {
+                                        let provider = translator::create_translator(
+                                            &translate_provider,
+                                            &azure_key,
+                                            &azure_region,
+                                            &translate_ollama_prompt,
+                                        );
+                                        log::info!("🌐 Traduciendo a '{}' ({})...", dest_lang, translate_provider);
+                                        match provider.translate(&text, &dest_lang) {
+                                            Ok(result) => {
+                                                if result.was_translated {
+                                                    log::info!(
+                                                        "✅ Traducción: '{}' → '{}': \"{}\"",
+                                                        result.detected_lang, dest_lang, result.text
+                                                    );
+                                                }
+                                                result.text
                                             }
-                                            result.text
-                                        }
-                                        Err(e) => {
-                                            log::error!("❌ Traducción falló, usando texto original: {}", e);
-                                            text
+                                            Err(e) => {
+                                                log::error!("❌ Traducción falló, usando texto original: {}", e);
+                                                text
+                                            }
                                         }
                                     }
                                 } else {

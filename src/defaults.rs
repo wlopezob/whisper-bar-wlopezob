@@ -36,6 +36,23 @@ pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
 /// Idioma destino de traducción por defecto
 pub const TRANSLATE_DEST_LANG: &str = "es";
 
+/// Proveedor de traducción por defecto
+pub const TRANSLATE_DEFAULT_PROVIDER: &str = "azure";
+
+/// Modelo Ollama para traducción
+pub const TRANSLATE_OLLAMA_MODEL: &str = "gemma4:e4b";
+
+/// Prompt por defecto para Ollama translator (usa {dest_lang} y {input_text} como placeholders)
+pub const TRANSLATE_OLLAMA_DEFAULT_PROMPT: &str =
+    "Eres un traductor. Analiza el texto y devuelve ÚNICAMENTE un JSON con este formato exacto:\n\
+     {\"text\": \"...\", \"detected_lang\": \"es\"}\n\n\
+     Reglas:\n\
+     - detected_lang: idioma del texto original (\"es\" o \"en\")\n\
+     - text: si detected_lang == \"{dest_lang}\", devuelve el texto original sin cambios\n\
+     - text: si detected_lang != \"{dest_lang}\", traduce a {dest_lang}\n\
+     - Nada más que el JSON. Sin explicaciones, sin markdown, sin backticks.\n\n\
+     Texto: \"{input_text}\"";
+
 /// Versión de la API de Azure MAI Transcribe (LLM Speech API)
 pub const AZURE_MAI_API_VERSION: &str = "2025-10-15";
 
