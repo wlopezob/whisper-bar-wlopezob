@@ -80,6 +80,39 @@ pub const TTS_LAST_AUDIO_FILE: &str = "last-tts.wav";
 /// Nombre del archivo con el último texto TTS (ver modal con ⌘⌥V)
 pub const TTS_LAST_TEXT_FILE: &str = "last-tts-text.txt";
 
+/// Proveedor TTS por defecto ("gemini" o "qwen")
+pub const TTS_DEFAULT_PROVIDER: &str = "gemini";
+
+/// Carpeta del modelo Qwen3-TTS VoiceDesign (relativa a APP_CONFIG_DIR)
+pub const TTS_QWEN_MODEL_DIR: &str = "tts-models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit";
+
+/// Venv Python con mlx-audio para Qwen3-TTS (relativa a APP_CONFIG_DIR)
+pub const TTS_QWEN_VENV_DIR: &str = "tts-venv";
+
+/// Temperatura de muestreo por defecto para Qwen3-TTS (más baja = timbre más estable)
+pub const TTS_QWEN_DEFAULT_TEMPERATURE: &str = "0.7";
+
+/// Descripción de voz por defecto para Qwen3-TTS VoiceDesign.
+/// Formato estructurado por atributos; el acento va primero porque es el que más pesa.
+pub const TTS_QWEN_DEFAULT_PROMPT: &str =
+    "accent: Native Latin American Spanish speaker from Mexico City. This is the most \
+     important attribute. Authentic Mexican Spanish phonetics in every word: soft pure \
+     vowels, tapped r, gentle consonants. Absolutely no English or foreign accent when \
+     speaking Spanish. English words are pronounced as a bilingual Mexican woman would, \
+     keeping her Spanish intonation and rhythm.\n\
+     language_identity: Spanish is her mother tongue; English is her fluent second language\n\
+     gender: Female\n\
+     age: Adult (late 20s to 30s)\n\
+     pitch: Medium female pitch with gentle, natural fluctuations\n\
+     speed: Moderate and conversational, natural rhythm\n\
+     volume: Soft and comfortable\n\
+     clarity: Exceptionally clear with soft consonants\n\
+     fluency: Perfectly fluid with natural breathing pauses\n\
+     texture: Warm and smooth, human-like\n\
+     emotion: Calm and friendly\n\
+     tone: Gentle, encouraging, conversational\n\
+     personality: Warm, intelligent, patient, like a helpful assistant";
+
 /// Voz Gemini por defecto para síntesis TTS
 pub const TTS_DEFAULT_VOICE: &str = "Sulafat";
 

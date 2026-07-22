@@ -57,6 +57,9 @@ struct WhisperApp {
     azure_mai_definition: Arc<Mutex<String>>,
     // TTS
     tts_enabled: Arc<Mutex<bool>>,
+    tts_provider: Arc<Mutex<String>>,
+    tts_qwen_prompt: Arc<Mutex<String>>,
+    tts_qwen_temperature: Arc<Mutex<String>>,
     tts_voice: Arc<Mutex<String>>,
     gemini_api_key: Arc<Mutex<String>>,
     tts_scene: Arc<Mutex<String>>,
@@ -97,6 +100,9 @@ impl WhisperApp {
         let azure_mai_definition = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
         // TTS
         let tts_enabled = db.get("tts_enabled", "false") == "true";
+        let tts_provider = db.get("tts_provider", defaults::TTS_DEFAULT_PROVIDER);
+        let tts_qwen_prompt = db.get("tts_qwen_prompt", defaults::TTS_QWEN_DEFAULT_PROMPT);
+        let tts_qwen_temperature = db.get("tts_qwen_temperature", defaults::TTS_QWEN_DEFAULT_TEMPERATURE);
         let tts_voice = db.get("tts_voice", defaults::TTS_DEFAULT_VOICE);
         let gemini_api_key = db.get("gemini_api_key", "");
         let tts_scene = db.get("tts_scene", defaults::TTS_DEFAULT_SCENE);
@@ -153,6 +159,9 @@ impl WhisperApp {
             azure_mai_api_version: Arc::new(Mutex::new(azure_mai_api_version)),
             azure_mai_definition: Arc::new(Mutex::new(azure_mai_definition)),
             tts_enabled: Arc::new(Mutex::new(tts_enabled)),
+            tts_provider: Arc::new(Mutex::new(tts_provider)),
+            tts_qwen_prompt: Arc::new(Mutex::new(tts_qwen_prompt)),
+            tts_qwen_temperature: Arc::new(Mutex::new(tts_qwen_temperature)),
             tts_voice: Arc::new(Mutex::new(tts_voice)),
             gemini_api_key: Arc::new(Mutex::new(gemini_api_key)),
             tts_scene: Arc::new(Mutex::new(tts_scene)),
@@ -336,6 +345,12 @@ impl WhisperApp {
         // TTS
         *self.tts_enabled.lock().unwrap() = v.tts_enabled;
         self.db.set("tts_enabled", if v.tts_enabled { "true" } else { "false" });
+        *self.tts_provider.lock().unwrap() = v.tts_provider.clone();
+        self.db.set("tts_provider", &v.tts_provider);
+        *self.tts_qwen_prompt.lock().unwrap() = v.tts_qwen_prompt.clone();
+        self.db.set("tts_qwen_prompt", &v.tts_qwen_prompt);
+        *self.tts_qwen_temperature.lock().unwrap() = v.tts_qwen_temperature.clone();
+        self.db.set("tts_qwen_temperature", &v.tts_qwen_temperature);
         *self.tts_voice.lock().unwrap() = v.tts_voice.clone();
         self.db.set("tts_voice", &v.tts_voice);
         *self.gemini_api_key.lock().unwrap() = v.gemini_api_key.clone();
@@ -415,6 +430,9 @@ impl ApplicationHandler for WhisperApp {
                     azure_mai_api_version: self.azure_mai_api_version.lock().unwrap().clone(),
                     azure_mai_definition: self.azure_mai_definition.lock().unwrap().clone(),
                     tts_enabled: *self.tts_enabled.lock().unwrap(),
+                    tts_provider: self.tts_provider.lock().unwrap().clone(),
+                    tts_qwen_prompt: self.tts_qwen_prompt.lock().unwrap().clone(),
+                    tts_qwen_temperature: self.tts_qwen_temperature.lock().unwrap().clone(),
                     tts_voice: self.tts_voice.lock().unwrap().clone(),
                     gemini_api_key: self.gemini_api_key.lock().unwrap().clone(),
                     tts_scene: self.tts_scene.lock().unwrap().clone(),

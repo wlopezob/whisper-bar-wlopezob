@@ -7,11 +7,14 @@ pub struct AudioData {
 }
 
 pub struct TtsConfig {
+    pub provider: String, // "gemini" | "qwen"
     pub voice: String,
     pub gemini_key: String,
     pub scene: String,
     pub sample_context: String,
     pub playback_rate: f32,
+    pub qwen_prompt: String,
+    pub qwen_temperature: f32,
 }
 
 pub trait TtsProvider {

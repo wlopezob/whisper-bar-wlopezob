@@ -3,11 +3,13 @@
 
 mod gemini;
 mod provider;
+mod qwen;
 mod say;
 
 pub use provider::{AudioData, TtsConfig, TtsProvider};
 
 use gemini::GeminiProvider;
+use qwen::QwenProvider;
 use say::SayProvider;
 use std::time::Duration;
 
@@ -119,7 +121,8 @@ pub fn kill_afplay() {
 
 pub fn speak(text: &str, config: &TtsConfig) {
     log::info!(
-        "TTS: síntesis iniciada — proveedor=gemini voz={} chars={}",
+        "TTS: síntesis iniciada — proveedor={} voz={} chars={}",
+        config.provider,
         config.voice,
         text.len()
     );
@@ -131,6 +134,27 @@ pub fn speak(text: &str, config: &TtsConfig) {
         clean.as_str()
     };
 
+    // ── Qwen3-TTS local (mlx-audio) ───────────────────────────────────────────
+    if config.provider == "qwen" {
+        let provider = QwenProvider {
+            prompt: if config.qwen_prompt.is_empty() {
+                crate::defaults::TTS_QWEN_DEFAULT_PROMPT.to_string()
+            } else {
+                config.qwen_prompt.clone()
+            },
+            temperature: config.qwen_temperature,
+        };
+        match provider.synthesize(clean) {
+            Ok(audio) => play_audio_file(audio, config.playback_rate),
+            Err(e) => {
+                log::error!("TTS Qwen error: {} — fallback a say", e);
+                SayProvider.say(clean, config.playback_rate);
+            }
+        }
+        return;
+    }
+
+    // ── Gemini TTS ────────────────────────────────────────────────────────────
     if config.gemini_key.is_empty() {
         log::info!("TTS: sin clave Gemini, fallback a say");
         SayProvider.say(clean, config.playback_rate);

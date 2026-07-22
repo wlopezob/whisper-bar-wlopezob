@@ -82,12 +82,16 @@ fn main() {
         std::process::exit(0);
     }
 
+    let provider       = db.get("tts_provider",        defaults::TTS_DEFAULT_PROVIDER);
     let voice          = db.get("tts_voice",          defaults::TTS_DEFAULT_VOICE);
     let gemini_key     = db.get("gemini_api_key",      "");
     let scene          = db.get("tts_scene",           defaults::TTS_DEFAULT_SCENE);
     let sample_context = db.get("tts_sample_context",  defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
     let playback_rate  = db.get("tts_playback_rate",   defaults::TTS_DEFAULT_PLAYBACK_RATE)
         .parse::<f32>().unwrap_or(1.0);
+    let qwen_prompt      = db.get("tts_qwen_prompt",      defaults::TTS_QWEN_DEFAULT_PROMPT);
+    let qwen_temperature = db.get("tts_qwen_temperature", defaults::TTS_QWEN_DEFAULT_TEMPERATURE)
+        .parse::<f32>().unwrap_or(0.7);
 
     let formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
     let formatter_prompt  = db.get("tts_formatter_prompt",  defaults::FORMATTER_DEFAULT_PROMPT);
@@ -141,11 +145,14 @@ fn main() {
     tts::kill_previous_instance();
     tts::write_pid_file();
     tts::speak(&final_text, &tts::TtsConfig {
+        provider,
         voice,
         gemini_key,
         scene,
         sample_context,
         playback_rate,
+        qwen_prompt,
+        qwen_temperature,
     });
     tts::cleanup_pid_file();
 

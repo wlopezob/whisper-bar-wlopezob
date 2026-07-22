@@ -26,6 +26,9 @@ pub struct SettingsValues {
     pub azure_mai_definition: String,
     // TTS
     pub tts_enabled: bool,
+    pub tts_provider: String,
+    pub tts_qwen_prompt: String,
+    pub tts_qwen_temperature: String,
     pub tts_voice: String,
     pub gemini_api_key: String,
     pub tts_scene: String,
@@ -111,6 +114,51 @@ fn set_ollama_prompt_hidden(hidden: bool) {
     });
 }
 
+// ── Thread-local: campos exclusivos de cada proveedor TTS (Gemini / Qwen) ────
+
+#[derive(Copy, Clone)]
+struct TtsProviderPtrs {
+    // Solo Gemini
+    lbl_voice: *const NSTextField,
+    tf_voice: *const NSTextField,
+    lbl_scene: *const NSTextField,
+    scroll_scene: *const NSScrollView,
+    lbl_context: *const NSTextField,
+    scroll_context: *const NSScrollView,
+    // Solo Qwen
+    lbl_qwen_prompt: *const NSTextField,
+    scroll_qwen_prompt: *const NSScrollView,
+    lbl_qwen_temp: *const NSTextField,
+    tf_qwen_temp: *const NSTextField,
+}
+
+unsafe impl Send for TtsProviderPtrs {}
+unsafe impl Sync for TtsProviderPtrs {}
+
+thread_local! {
+    static TTS_PROVIDER_FIELDS: std::cell::RefCell<Option<TtsProviderPtrs>> =
+        std::cell::RefCell::new(None);
+}
+
+fn set_tts_provider_fields(qwen_selected: bool) {
+    TTS_PROVIDER_FIELDS.with(|cell| {
+        if let Some(ptrs) = *cell.borrow() {
+            unsafe {
+                let _: () = msg_send![&*ptrs.lbl_voice, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.tf_voice, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.lbl_scene, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.scroll_scene, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.lbl_context, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.scroll_context, setHidden: qwen_selected];
+                let _: () = msg_send![&*ptrs.lbl_qwen_prompt, setHidden: !qwen_selected];
+                let _: () = msg_send![&*ptrs.scroll_qwen_prompt, setHidden: !qwen_selected];
+                let _: () = msg_send![&*ptrs.lbl_qwen_temp, setHidden: !qwen_selected];
+                let _: () = msg_send![&*ptrs.tf_qwen_temp, setHidden: !qwen_selected];
+            }
+        }
+    });
+}
+
 // ── Delegate: Aplicar / Cancelar + toggle de sección Azure ───────────────────
 define_class!(
     #[unsafe(super(NSObject))]
@@ -147,6 +195,16 @@ define_class!(
                 .map(|s| s.to_string().contains("Ollama"))
                 .unwrap_or(false);
             set_ollama_prompt_hidden(!is_ollama);
+        }
+
+        /// Llamado cuando el usuario cambia el proveedor de TTS (Gemini / Qwen)
+        #[unsafe(method(ttsProviderChanged:))]
+        fn tts_provider_changed(&self, sender: &NSPopUpButton) {
+            let is_qwen = sender
+                .titleOfSelectedItem()
+                .map(|s| s.to_string().contains("Qwen"))
+                .unwrap_or(false);
+            set_tts_provider_fields(is_qwen);
         }
     }
 );
@@ -408,9 +466,27 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_tts);
 
-    content.addSubview(&label("Clave Gemini:", 20.0, 642.0, 90.0, mtm));
+    // ── Proveedor TTS (Gemini cloud / Qwen local) ─────────────────────────────
+    content.addSubview(&label("Proveedor:", 20.0, 644.0, 75.0, mtm));
+    let popup_tts_provider = NSPopUpButton::initWithFrame_pullsDown(
+        NSPopUpButton::alloc(mtm),
+        rect(100.0, 641.0, 220.0, 26.0),
+        false,
+    );
+    popup_tts_provider.addItemWithTitle(&NSString::from_str("Gemini TTS"));
+    popup_tts_provider.addItemWithTitle(&NSString::from_str("Qwen3-TTS (local)"));
+    popup_tts_provider.selectItemWithTitle(&NSString::from_str(
+        if current.tts_provider == "qwen" { "Qwen3-TTS (local)" } else { "Gemini TTS" },
+    ));
+    unsafe {
+        popup_tts_provider.setTarget(Some(delegate_obj));
+        popup_tts_provider.setAction(Some(sel!(ttsProviderChanged:)));
+    }
+    content.addSubview(&popup_tts_provider);
+
+    content.addSubview(&label("Clave Gemini:", 20.0, 610.0, 90.0, mtm));
     let gemini_key_initial = current.gemini_api_key.as_str();
-    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 639.0, 285.0, mtm);
+    let tf_gemini_key = input_field(gemini_key_initial, 115.0, 607.0, 285.0, mtm);
     content.addSubview(&tf_gemini_key);
 
     // ── Formatter (paso 1 del pipeline: preprocesa el texto antes de TTS) ─────
@@ -422,7 +498,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             mtm,
         )
     };
-    chk_formatter.setFrame(rect(20.0, 606.0, 280.0, 22.0));
+    chk_formatter.setFrame(rect(20.0, 574.0, 280.0, 22.0));
     chk_formatter.setState(if current.tts_formatter_enabled {
         NSControlStateValueOn
     } else {
@@ -430,10 +506,10 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_formatter);
 
-    content.addSubview(&label("Prompt TTS:", 20.0, 580.0, 80.0, mtm));
+    content.addSubview(&label("Prompt TTS:", 20.0, 548.0, 80.0, mtm));
     let scroll_formatter_prompt = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 522.0, 380.0, 55.0),
+        rect(20.0, 490.0, 380.0, 55.0),
     );
     scroll_formatter_prompt.setHasVerticalScroller(true);
     scroll_formatter_prompt.setHasHorizontalScroller(false);
@@ -454,28 +530,30 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     content.addSubview(&scroll_formatter_prompt);
 
     // ── Voz / Velocidad ───────────────────────────────────────────────────────
-    content.addSubview(&label("Voz:", 20.0, 492.0, 35.0, mtm));
+    let lbl_tts_voice = label("Voz:", 20.0, 460.0, 35.0, mtm);
+    content.addSubview(&lbl_tts_voice);
     let tts_voice_initial = if current.tts_voice.is_empty() {
         crate::defaults::TTS_DEFAULT_VOICE
     } else {
         &current.tts_voice
     };
-    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 489.0, 200.0, mtm);
+    let tf_tts_voice = input_field(tts_voice_initial, 60.0, 457.0, 200.0, mtm);
     content.addSubview(&tf_tts_voice);
 
-    content.addSubview(&label("Vel:", 268.0, 492.0, 30.0, mtm));
+    content.addSubview(&label("Vel:", 268.0, 460.0, 30.0, mtm));
     let rate_initial = if current.tts_playback_rate.is_empty() {
         crate::defaults::TTS_DEFAULT_PLAYBACK_RATE
     } else {
         &current.tts_playback_rate
     };
-    let tf_tts_rate = input_field(rate_initial, 300.0, 489.0, 100.0, mtm);
+    let tf_tts_rate = input_field(rate_initial, 300.0, 457.0, 100.0, mtm);
     content.addSubview(&tf_tts_rate);
 
-    content.addSubview(&label("Escena:", 20.0, 462.0, 55.0, mtm));
+    let lbl_tts_scene = label("Escena:", 20.0, 430.0, 55.0, mtm);
+    content.addSubview(&lbl_tts_scene);
     let scroll_tts_scene = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 392.0, 380.0, 67.0),
+        rect(20.0, 360.0, 380.0, 67.0),
     );
     scroll_tts_scene.setHasVerticalScroller(true);
     scroll_tts_scene.setHasHorizontalScroller(false);
@@ -495,10 +573,11 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     scroll_tts_scene.setDocumentView(Some(txt_tts_scene.as_ref()));
     content.addSubview(&scroll_tts_scene);
 
-    content.addSubview(&label("Contexto:", 20.0, 367.0, 65.0, mtm));
+    let lbl_tts_context = label("Contexto:", 20.0, 335.0, 65.0, mtm);
+    content.addSubview(&lbl_tts_context);
     let scroll_tts_context = NSScrollView::initWithFrame(
         NSScrollView::alloc(mtm),
-        rect(20.0, 297.0, 380.0, 67.0),
+        rect(20.0, 265.0, 380.0, 67.0),
     );
     scroll_tts_context.setHasVerticalScroller(true);
     scroll_tts_context.setHasHorizontalScroller(false);
@@ -518,6 +597,59 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     scroll_tts_context.setDocumentView(Some(txt_tts_context.as_ref()));
     content.addSubview(&scroll_tts_context);
 
+    // ── Campos Qwen3-TTS (ocupan la zona de Voz/Escena/Contexto de Gemini) ────
+    let lbl_qwen_prompt = label("Prompt voz Qwen:", 20.0, 460.0, 130.0, mtm);
+    content.addSubview(&lbl_qwen_prompt);
+    let scroll_qwen_prompt = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        rect(20.0, 295.0, 380.0, 160.0),
+    );
+    scroll_qwen_prompt.setHasVerticalScroller(true);
+    scroll_qwen_prompt.setHasHorizontalScroller(false);
+    let txt_qwen_prompt = NSTextView::initWithFrame(
+        NSTextView::alloc(mtm),
+        rect(0.0, 0.0, 380.0, 160.0),
+    );
+    txt_qwen_prompt.setEditable(true);
+    txt_qwen_prompt.setSelectable(true);
+    txt_qwen_prompt.setRichText(false);
+    let qwen_prompt_initial = if current.tts_qwen_prompt.is_empty() {
+        crate::defaults::TTS_QWEN_DEFAULT_PROMPT
+    } else {
+        &current.tts_qwen_prompt
+    };
+    txt_qwen_prompt.setString(&NSString::from_str(qwen_prompt_initial));
+    scroll_qwen_prompt.setDocumentView(Some(txt_qwen_prompt.as_ref()));
+    content.addSubview(&scroll_qwen_prompt);
+
+    let lbl_qwen_temp = label("Temp:", 20.0, 267.0, 45.0, mtm);
+    content.addSubview(&lbl_qwen_temp);
+    let qwen_temp_initial = if current.tts_qwen_temperature.is_empty() {
+        crate::defaults::TTS_QWEN_DEFAULT_TEMPERATURE
+    } else {
+        &current.tts_qwen_temperature
+    };
+    let tf_qwen_temp = input_field(qwen_temp_initial, 70.0, 264.0, 80.0, mtm);
+    content.addSubview(&tf_qwen_temp);
+
+    // Registrar punteros para el toggle Gemini/Qwen
+    TTS_PROVIDER_FIELDS.with(|cell| {
+        *cell.borrow_mut() = Some(TtsProviderPtrs {
+            lbl_voice: &*lbl_tts_voice as *const NSTextField,
+            tf_voice: &*tf_tts_voice as *const NSTextField,
+            lbl_scene: &*lbl_tts_scene as *const NSTextField,
+            scroll_scene: &*scroll_tts_scene as *const NSScrollView,
+            lbl_context: &*lbl_tts_context as *const NSTextField,
+            scroll_context: &*scroll_tts_context as *const NSScrollView,
+            lbl_qwen_prompt: &*lbl_qwen_prompt as *const NSTextField,
+            scroll_qwen_prompt: &*scroll_qwen_prompt as *const NSScrollView,
+            lbl_qwen_temp: &*lbl_qwen_temp as *const NSTextField,
+            tf_qwen_temp: &*tf_qwen_temp as *const NSTextField,
+        });
+    });
+    // Visibilidad inicial según proveedor guardado
+    set_tts_provider_fields(current.tts_provider == "qwen");
+
     // ── Mostrar texto modal (⌘⌥V) ────────────────────────────────────────────
     let chk_show_modal = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -527,7 +659,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             mtm,
         )
     };
-    chk_show_modal.setFrame(rect(20.0, 265.0, 280.0, 22.0));
+    chk_show_modal.setFrame(rect(20.0, 233.0, 280.0, 22.0));
     chk_show_modal.setState(if current.tts_show_modal {
         NSControlStateValueOn
     } else {
@@ -597,6 +729,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     // Limpiar referencias de thread_locals
     AZURE_FIELDS.with(|cell| { *cell.borrow_mut() = None; });
     OLLAMA_PROMPT_FIELDS.with(|cell| { *cell.borrow_mut() = None; });
+    TTS_PROVIDER_FIELDS.with(|cell| { *cell.borrow_mut() = None; });
 
     if response != NSModalResponseOK {
         return None;
@@ -633,6 +766,20 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
 
     // Leer valores TTS
     let tts_enabled = chk_tts.state() == NSControlStateValueOn;
+    let tts_provider = popup_tts_provider
+        .titleOfSelectedItem()
+        .map(|s| {
+            if s.to_string().contains("Qwen") { "qwen".to_string() } else { "gemini".to_string() }
+        })
+        .unwrap_or_else(|| "gemini".to_string());
+    let tts_qwen_prompt = {
+        let v = txt_qwen_prompt.string().to_string().trim().to_string();
+        if v.is_empty() { crate::defaults::TTS_QWEN_DEFAULT_PROMPT.to_string() } else { v }
+    };
+    let tts_qwen_temperature = {
+        let v = tf_qwen_temp.stringValue().to_string().trim().to_string();
+        if v.parse::<f32>().is_ok() { v } else { crate::defaults::TTS_QWEN_DEFAULT_TEMPERATURE.to_string() }
+    };
     let tts_voice = {
         let v = tf_tts_voice.stringValue().to_string().trim().to_string();
         if v.is_empty() { crate::defaults::TTS_DEFAULT_VOICE.to_string() } else { v }
@@ -669,6 +816,9 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
         azure_mai_api_version,
         azure_mai_definition,
         tts_enabled,
+        tts_provider,
+        tts_qwen_prompt,
+        tts_qwen_temperature,
         tts_voice,
         gemini_api_key,
         tts_scene,
