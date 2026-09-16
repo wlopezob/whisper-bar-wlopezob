@@ -97,7 +97,7 @@ impl WhisperApp {
         let azure_mai_region = db.get("azure_mai_region", "");
         let azure_mai_model = db.get("azure_mai_model", "");
         let azure_mai_api_version = db.get("azure_mai_api_version", defaults::AZURE_MAI_API_VERSION);
-        let azure_mai_definition = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
+        let azure_mai_definition = migrate_mai_definition(&db);
         // TTS
         let tts_enabled = db.get("tts_enabled", "false") == "true";
         let tts_provider = db.get("tts_provider", defaults::TTS_DEFAULT_PROVIDER);
@@ -322,8 +322,18 @@ impl WhisperApp {
         } else {
             v.azure_mai_api_version.clone()
         };
+        // Un Definition inválido no se nota al guardar: revienta después, al
+        // transcribir, con un HTTP 400 de Azure. Se valida aquí y se conserva el
+        // valor anterior antes que persistir algo que rompe la transcripción.
         let definition = if v.azure_mai_definition.is_empty() {
             defaults::AZURE_MAI_DEFINITION.to_string()
+        } else if serde_json::from_str::<serde_json::Value>(&v.azure_mai_definition).is_err() {
+            log::error!(
+                "Azure MAI: Definition JSON inválido, se conserva el anterior. \
+                 Revisa que las comillas sean rectas (\") y no tipográficas: {}",
+                v.azure_mai_definition
+            );
+            self.azure_mai_definition.lock().unwrap().clone()
         } else {
             v.azure_mai_definition.clone()
         };
@@ -496,6 +506,24 @@ impl ApplicationHandler for WhisperApp {
             Instant::now() + Duration::from_millis(20),
         ));
     }
+}
+
+/// Migra la definition de Azure MAI de una versión anterior a la actual.
+///
+/// El valor vive en SQLite, así que cambiar el default de `defaults.rs` no basta:
+/// las instalaciones existentes seguirían llamando a MAI-Transcribe-1.5. Solo se
+/// reemplaza si el valor guardado coincide exactamente con un default antiguo —
+/// si el usuario lo editó, se respeta.
+fn migrate_mai_definition(db: &db::Db) -> String {
+    let stored = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
+
+    if defaults::AZURE_MAI_LEGACY_DEFINITIONS.contains(&stored.as_str()) {
+        log::info!("Azure MAI: migrando definition a MAI-Transcribe-2");
+        db.set("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
+        return defaults::AZURE_MAI_DEFINITION.to_string();
+    }
+
+    stored
 }
 
 fn main() {

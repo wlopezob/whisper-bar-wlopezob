@@ -222,6 +222,18 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
 }
 
+/// Desactiva las sustituciones automáticas de texto de macOS en un NSTextView.
+///
+/// Por defecto, teclear `"` inserta comillas tipográficas (`“` `”`). En los campos
+/// que contienen JSON —el Definition de Azure y el prompt de Ollama— eso produce
+/// un valor inválido que solo falla en runtime: Azure responde HTTP 400
+/// "Invalid JSON format" y la transcripción se cae sin pista de la causa.
+fn disable_text_substitutions(view: &NSTextView) {
+    view.setAutomaticQuoteSubstitutionEnabled(false);
+    view.setAutomaticDashSubstitutionEnabled(false);
+    view.setAutomaticTextReplacementEnabled(false);
+}
+
 fn label(text: &str, x: f64, y: f64, w: f64, mtm: MainThreadMarker) -> Retained<NSTextField> {
     let s = NSString::from_str(text);
     let lbl = NSTextField::labelWithString(&s, mtm);
@@ -339,6 +351,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_definition.setEditable(true);
     txt_definition.setSelectable(true);
     txt_definition.setRichText(false);
+    disable_text_substitutions(&txt_definition);
     txt_definition.setString(&NSString::from_str(&current.azure_mai_definition));
     scroll_definition.setDocumentView(Some(txt_definition.as_ref()));
     content.addSubview(&scroll_definition);
@@ -426,6 +439,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_translate_prompt.setEditable(true);
     txt_translate_prompt.setSelectable(true);
     txt_translate_prompt.setRichText(false);
+    disable_text_substitutions(&txt_translate_prompt);
     let ollama_prompt_initial = if current.translate_ollama_prompt.is_empty() {
         crate::defaults::TRANSLATE_OLLAMA_DEFAULT_PROMPT
     } else {
@@ -520,6 +534,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_formatter_prompt.setEditable(true);
     txt_formatter_prompt.setSelectable(true);
     txt_formatter_prompt.setRichText(false);
+    disable_text_substitutions(&txt_formatter_prompt);
     let formatter_prompt_initial = if current.tts_formatter_prompt.is_empty() {
         crate::defaults::FORMATTER_DEFAULT_PROMPT
     } else {
@@ -564,6 +579,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_tts_scene.setEditable(true);
     txt_tts_scene.setSelectable(true);
     txt_tts_scene.setRichText(false);
+    disable_text_substitutions(&txt_tts_scene);
     let scene_initial = if current.tts_scene.is_empty() {
         crate::defaults::TTS_DEFAULT_SCENE
     } else {
@@ -588,6 +604,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_tts_context.setEditable(true);
     txt_tts_context.setSelectable(true);
     txt_tts_context.setRichText(false);
+    disable_text_substitutions(&txt_tts_context);
     let context_initial = if current.tts_sample_context.is_empty() {
         crate::defaults::TTS_DEFAULT_SAMPLE_CONTEXT
     } else {
@@ -613,6 +630,7 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     txt_qwen_prompt.setEditable(true);
     txt_qwen_prompt.setSelectable(true);
     txt_qwen_prompt.setRichText(false);
+    disable_text_substitutions(&txt_qwen_prompt);
     let qwen_prompt_initial = if current.tts_qwen_prompt.is_empty() {
         crate::defaults::TTS_QWEN_DEFAULT_PROMPT
     } else {

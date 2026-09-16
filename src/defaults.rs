@@ -56,9 +56,29 @@ pub const TRANSLATE_OLLAMA_DEFAULT_PROMPT: &str =
 /// Versión de la API de Azure MAI Transcribe (LLM Speech API)
 pub const AZURE_MAI_API_VERSION: &str = "2025-10-15";
 
-/// Definition JSON por defecto para MAI-Transcribe-1.5
-pub const AZURE_MAI_DEFINITION: &str =
-    r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}"#;
+/// Definition JSON por defecto para MAI-Transcribe-2.
+///
+/// - `transcribeStyle: "clean"` elimina muletillas y falsos arranques. El default
+///   del modelo es `"verbatim"`, que los conserva — peor para dictado.
+/// - `phraseList.phrases` sesga el reconocimiento hacia jerga técnica. Sin esto,
+///   el modelo transcribe "rusqlite" como "Rush lite" y "cpal" como "CPAL".
+///   Son pistas, no salida forzada. Editable desde Configuración.
+pub const AZURE_MAI_DEFINITION: &str = concat!(
+    r#"{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2","#,
+    r#""modelOptions":{"transcribeStyle":"clean"}},"#,
+    r#""phraseList":{"phrases":["#,
+    r#""Claude Code","Codex","rusqlite","cpal","hound","whisper-cli","#,
+    r#""Gemini","Ollama","Rust","cargo","hotkey","commit","pull request","#,
+    r#""endpoint","deploy","build","log","prompt","token""#,
+    r#"]}}"#
+);
+
+/// Definitions de versiones anteriores. Si la guardada en SQLite coincide
+/// exactamente con una de estas, se migra al default actual al arrancar; una
+/// definition editada a mano se respeta y nunca se sobrescribe.
+pub const AZURE_MAI_LEGACY_DEFINITIONS: &[&str] = &[
+    r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}"#,
+];
 
 /// Prompt de corrección gramatical por defecto para inglés.
 /// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
@@ -161,3 +181,36 @@ pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/llama-cli",        // fallback legacy
     "/usr/local/bin/llama-cli",           // fallback legacy
 ];
+
+#[cfg(test)]
+mod tests {
+    /// AZURE_MAI_DEFINITION se arma con concat! de varios fragmentos: un error al
+    /// editarlo produce JSON roto que solo se detectaría en runtime contra Azure.
+    #[test]
+    fn azure_mai_definition_es_json_valido() {
+        let v: serde_json::Value = serde_json::from_str(super::AZURE_MAI_DEFINITION)
+            .expect("AZURE_MAI_DEFINITION debe ser JSON válido");
+
+        assert_eq!(v["enhancedMode"]["enabled"], true);
+        assert_eq!(v["enhancedMode"]["model"], "MAI-Transcribe-2");
+        assert_eq!(v["enhancedMode"]["modelOptions"]["transcribeStyle"], "clean");
+
+        let phrases = v["phraseList"]["phrases"]
+            .as_array()
+            .expect("phraseList.phrases debe ser un array");
+        assert!(!phrases.is_empty());
+        assert!(phrases.iter().all(|p| p.is_string()));
+    }
+
+    /// Si una legacy definition no coincide byte a byte con lo que hay en SQLite,
+    /// la migración no dispara y el usuario se queda en el modelo viejo.
+    #[test]
+    fn legacy_definitions_son_json_valido() {
+        assert!(!super::AZURE_MAI_LEGACY_DEFINITIONS.is_empty());
+        for d in super::AZURE_MAI_LEGACY_DEFINITIONS {
+            serde_json::from_str::<serde_json::Value>(d)
+                .unwrap_or_else(|e| panic!("legacy definition inválida: {} — {}", d, e));
+            assert_ne!(*d, super::AZURE_MAI_DEFINITION, "legacy == actual: migración en bucle");
+        }
+    }
+}

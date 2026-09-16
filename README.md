@@ -80,7 +80,12 @@ Transcripción de alta precisión vía Azure Cognitive Services. Requiere:
 
 Configurable desde **Configuración → AZURE MAI TRANSCRIBE → Backend → Azure MAI**.
 
-El modelo por defecto es `mai-transcribe-1.5` con enhanced mode activado.
+El modelo por defecto es `MAI-Transcribe-2` con enhanced mode activado, estilo
+`clean` (elimina muletillas) y una lista de términos técnicos en `phraseList` para
+que no destroce la jerga del proyecto.
+
+> Las instalaciones que venían de `mai-transcribe-1.5` se migran solas al arrancar.
+> Si editaste el Definition JSON a mano, se respeta y no se toca.
 
 ### 7. (Opcional) Traducción automática
 
@@ -168,7 +173,7 @@ Panel nativo macOS con scroll vertical. Secciones en orden de flujo:
 | API Key | Clave de Azure Cognitive Services |
 | Región | Región de Azure (ej: `eastus`) |
 | API Version | Versión de la API (default: `2025-10-15`) |
-| Definition JSON | Configuración del modelo (default: `mai-transcribe-1.5` con enhanced mode) |
+| Definition JSON | Configuración del modelo (default: `MAI-Transcribe-2`, estilo `clean` + `phraseList`) |
 
 ### TRADUCCIÓN
 
@@ -245,7 +250,7 @@ src/
 ├── hotkey.rs            — Hotkeys globales: ⌘⌥W, ⌘⌥R, ⌘⌥V
 ├── recorder.rs          — Grabación de audio (cpal + hound, 16kHz mono PCM)
 ├── transcriber.rs       — Invocación de whisper-cli con timeout 60s
-├── azure_transcriber.rs — Backend Azure MAI Transcribe (mai-transcribe-1.5)
+├── azure_transcriber.rs — Backend Azure MAI Transcribe (MAI-Transcribe-2)
 ├── translator.rs        — Traducción Azure Translator v3 con auto-detección
 ├── formatter.rs         — Formateador Gemini Flash Lite para TTS
 ├── tts/
@@ -296,7 +301,7 @@ Claude Code / Codex termina respuesta
 | `azure_mai_key` | string | `""` |
 | `azure_mai_region` | string | `""` |
 | `azure_mai_api_version` | string | `"2025-10-15"` |
-| `azure_mai_definition` | JSON string | `{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}` |
+| `azure_mai_definition` | JSON string | `{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2",…}}` (ver `defaults.rs`) |
 | `tts_enabled` | `"true"` \| `"false"` | `"false"` |
 | `gemini_api_key` | string | `""` |
 | `tts_voice` | nombre de voz Gemini | `"Sulafat"` |
