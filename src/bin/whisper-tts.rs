@@ -6,7 +6,8 @@
 // Siempre termina con exit code 0.
 
 use std::io::Read;
-use whisper_bar_rust::{db, defaults, formatter, logger, tts};
+use whisper_bar_rust::settings::Settings;
+use whisper_bar_rust::{db, defaults, formatter, logger, text, tts};
 
 /// Evalúa si el texto necesita pasar por el formatter LLM antes de TTS.
 /// Retorna true si el contenido tiene elementos que suenan mal al leerlos en voz alta.
@@ -43,13 +44,16 @@ fn main() {
     }
 
     // Intentar parsear JSON {user, assistant}; si falla, tratar como texto plano
-    let (user_msg, assistant_msg) = match serde_json::from_str::<serde_json::Value>(&raw) {
+    // `session` solo lo envía el hook de Claude Code (nombre de /rename, "" si
+    // no tiene); su ausencia (Codex, prueba manual) desactiva el filtro.
+    let (user_msg, assistant_msg, session) = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) if v.is_object() => {
             let user      = v["user"].as_str().unwrap_or("").trim().to_string();
             let assistant = v["assistant"].as_str().unwrap_or("").trim().to_string();
-            (user, assistant)
+            let session   = v.get("session").and_then(|s| s.as_str()).map(str::to_string);
+            (user, assistant, session)
         }
-        _ => (String::new(), raw.clone()),
+        _ => (String::new(), raw.clone(), None),
     };
 
     if assistant_msg.is_empty() {
@@ -60,12 +64,12 @@ fn main() {
     log::info!(
         "TTS [USUARIO] ({} chars):\n---\n{}\n---",
         user_msg.len(),
-        &user_msg[..user_msg.len().min(300)]
+        text::truncate(&user_msg, 300)
     );
     log::info!(
         "TTS [ASISTENTE] ({} chars):\n---\n{}\n---",
         assistant_msg.len(),
-        &assistant_msg[..assistant_msg.len().min(500)]
+        text::truncate(&assistant_msg, 500)
     );
 
     let db = match db::Db::open() {
@@ -76,28 +80,28 @@ fn main() {
         }
     };
 
-    let tts_enabled = db.get("tts_enabled", "false") == "true";
-    if !tts_enabled {
+    let settings = Settings::load(&db);
+    if !settings.tts_enabled {
         log::info!("TTS: desactivado (tts_enabled=false), omitiendo");
         std::process::exit(0);
     }
 
-    let provider       = db.get("tts_provider",        defaults::TTS_DEFAULT_PROVIDER);
-    let voice          = db.get("tts_voice",          defaults::TTS_DEFAULT_VOICE);
-    let gemini_key     = db.get("gemini_api_key",      "");
-    let scene          = db.get("tts_scene",           defaults::TTS_DEFAULT_SCENE);
-    let sample_context = db.get("tts_sample_context",  defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
-    let playback_rate  = db.get("tts_playback_rate",   defaults::TTS_DEFAULT_PLAYBACK_RATE)
-        .parse::<f32>().unwrap_or(1.0);
-    let qwen_prompt      = db.get("tts_qwen_prompt",      defaults::TTS_QWEN_DEFAULT_PROMPT);
-    let qwen_temperature = db.get("tts_qwen_temperature", defaults::TTS_QWEN_DEFAULT_TEMPERATURE)
-        .parse::<f32>().unwrap_or(0.7);
+    // Antes de formatear o matar la reproducción en curso: una sesión que no se
+    // escucha no debe gastar llamadas ni cortar el audio de otra.
+    if !settings.should_speak_session(session.as_deref()) {
+        log::info!(
+            "TTS: sesión {:?} no está en 'Sesiones a escuchar' ({:?}), omitiendo",
+            session.as_deref().unwrap_or(""),
+            settings.tts_sessions
+        );
+        std::process::exit(0);
+    }
+    if let Some(name) = session.as_deref().filter(|n| !n.is_empty()) {
+        log::info!("TTS: sesión '{}'", name);
+    }
 
-    let formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
-    let formatter_prompt  = db.get("tts_formatter_prompt",  defaults::FORMATTER_DEFAULT_PROMPT);
-    let show_modal        = db.get("tts_show_modal", "false") == "true";
-
-    let (final_text, modal_title) = if formatter_enabled && !gemini_key.is_empty() {
+    let gemini_key = &settings.gemini_api_key;
+    let (final_text, modal_title) = if settings.tts_formatter_enabled && !gemini_key.is_empty() {
         if needs_formatter(&assistant_msg) {
             log::info!(
                 "TTS formatter: necesario — enviando a {} (usuario={}c asistente={}c)",
@@ -106,14 +110,14 @@ fn main() {
                 assistant_msg.len()
             );
             match (formatter::GeminiFormatter { api_key: gemini_key.clone() })
-                .format(&user_msg, &assistant_msg, &formatter_prompt)
+                .format(&user_msg, &assistant_msg, &settings.tts_formatter_prompt)
             {
                 Ok(formatted) => {
                     log::info!(
                         "TTS formatter: ok ({} chars → {} chars):\n---\n{}\n---",
                         assistant_msg.len(),
                         formatted.len(),
-                        &formatted[..formatted.len().min(500)]
+                        text::truncate(&formatted, 500)
                     );
                     (formatted, "TTS — Formatter activo")
                 }
@@ -127,7 +131,7 @@ fn main() {
             (assistant_msg.clone(), "TTS — Directo")
         }
     } else {
-        if !formatter_enabled {
+        if !settings.tts_formatter_enabled {
             log::info!("TTS formatter: desactivado, usando texto original");
         } else {
             log::info!("TTS formatter: sin clave Gemini, usando texto original");
@@ -138,22 +142,13 @@ fn main() {
     // Guardar texto para re-mostrar con ⌘⌥V
     save_tts_text(modal_title, &final_text);
 
-    if show_modal {
+    if settings.tts_show_modal {
         show_modal_async(modal_title, &final_text);
     }
 
     tts::kill_previous_instance();
     tts::write_pid_file();
-    tts::speak(&final_text, &tts::TtsConfig {
-        provider,
-        voice,
-        gemini_key,
-        scene,
-        sample_context,
-        playback_rate,
-        qwen_prompt,
-        qwen_temperature,
-    });
+    tts::speak(&final_text, &settings.tts_config());
     tts::cleanup_pid_file();
 
     std::process::exit(0);

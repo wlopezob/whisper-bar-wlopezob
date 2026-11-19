@@ -2,9 +2,10 @@
 
 use whisper_bar_rust::{
     azure_transcriber, config, db, defaults, hotkey,
-    logger, recorder, transcriber, translator, tts,
+    logger, recorder, settings, transcriber, translator, tts,
 };
-use whisper_bar_rust::settings_window::{SettingsValues, show_settings_modal};
+use whisper_bar_rust::settings::Settings;
+use whisper_bar_rust::settings_window::show_settings_modal;
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -42,32 +43,9 @@ struct WhisperApp {
     // Config e estado (inicializados en new())
     config: Arc<Config>,
     db: Arc<db::Db>,
+    settings: Arc<Mutex<Settings>>,
     app_state: Arc<Mutex<AppState>>,
     recorder: Arc<Mutex<Recorder>>,
-    translate_enabled: Arc<Mutex<bool>>,
-    translate_dest_lang: Arc<Mutex<String>>,
-    translate_provider: Arc<Mutex<String>>,
-    translate_ollama_prompt: Arc<Mutex<String>>,
-    // Azure MAI Transcribe
-    azure_mai_enabled: Arc<Mutex<bool>>,
-    azure_mai_key: Arc<Mutex<String>>,
-    azure_mai_region: Arc<Mutex<String>>,
-    azure_mai_model: Arc<Mutex<String>>,
-    azure_mai_api_version: Arc<Mutex<String>>,
-    azure_mai_definition: Arc<Mutex<String>>,
-    // TTS
-    tts_enabled: Arc<Mutex<bool>>,
-    tts_provider: Arc<Mutex<String>>,
-    tts_qwen_prompt: Arc<Mutex<String>>,
-    tts_qwen_temperature: Arc<Mutex<String>>,
-    tts_voice: Arc<Mutex<String>>,
-    gemini_api_key: Arc<Mutex<String>>,
-    tts_scene: Arc<Mutex<String>>,
-    tts_sample_context: Arc<Mutex<String>>,
-    tts_formatter_enabled: Arc<Mutex<bool>>,
-    tts_formatter_prompt: Arc<Mutex<String>>,
-    tts_playback_rate: Arc<Mutex<String>>,
-    tts_show_modal: Arc<Mutex<bool>>,
     ui_tx: mpsc::Sender<UiMsg>,
     ui_rx: mpsc::Receiver<UiMsg>,
 
@@ -88,29 +66,8 @@ impl WhisperApp {
         let config = Arc::new(Config::new());
 
         let db = db::Db::open().expect("No se pudo abrir la base de datos");
-        let translate_enabled = db.get("translate_enabled", "false") == "true";
-        let translate_dest_lang = db.get("translate_dest_lang", defaults::TRANSLATE_DEST_LANG);
-        let translate_provider = db.get("translate_provider", defaults::TRANSLATE_DEFAULT_PROVIDER);
-        let translate_ollama_prompt = db.get("translate_ollama_prompt", defaults::TRANSLATE_OLLAMA_DEFAULT_PROMPT);
-        let azure_mai_enabled = db.get("azure_mai_enabled", "false") == "true";
-        let azure_mai_key = db.get("azure_mai_key", "");
-        let azure_mai_region = db.get("azure_mai_region", "");
-        let azure_mai_model = db.get("azure_mai_model", "");
-        let azure_mai_api_version = db.get("azure_mai_api_version", defaults::AZURE_MAI_API_VERSION);
-        let azure_mai_definition = migrate_mai_definition(&db);
-        // TTS
-        let tts_enabled = db.get("tts_enabled", "false") == "true";
-        let tts_provider = db.get("tts_provider", defaults::TTS_DEFAULT_PROVIDER);
-        let tts_qwen_prompt = db.get("tts_qwen_prompt", defaults::TTS_QWEN_DEFAULT_PROMPT);
-        let tts_qwen_temperature = db.get("tts_qwen_temperature", defaults::TTS_QWEN_DEFAULT_TEMPERATURE);
-        let tts_voice = db.get("tts_voice", defaults::TTS_DEFAULT_VOICE);
-        let gemini_api_key = db.get("gemini_api_key", "");
-        let tts_scene = db.get("tts_scene", defaults::TTS_DEFAULT_SCENE);
-        let tts_sample_context = db.get("tts_sample_context", defaults::TTS_DEFAULT_SAMPLE_CONTEXT);
-        let tts_formatter_enabled = db.get("tts_formatter_enabled", "false") == "true";
-        let tts_formatter_prompt = db.get("tts_formatter_prompt", defaults::FORMATTER_DEFAULT_PROMPT);
-        let tts_playback_rate = db.get("tts_playback_rate", defaults::TTS_DEFAULT_PLAYBACK_RATE);
-        let tts_show_modal = db.get("tts_show_modal", "false") == "true";
+        settings::migrate(&db);
+        let settings = Settings::load(&db);
 
         log::info!("=== whisperwlopezob v2.0.0 ===");
         log::info!(
@@ -123,53 +80,17 @@ impl WhisperApp {
             if config.is_model_valid() { "✅" } else { "❌" },
             config.model_filename()
         );
-        log::info!(
-            "llama-cli:   {} {}",
-            if config.is_llama_cli_valid() { "✅" } else { "❌" },
-            if config.is_llama_cli_valid() { &config.llama_cli_path } else { "no encontrado" }
-        );
-        log::info!("modelos LLM: {} encontrados", config.llm_models.len());
-        log::info!(
-            "Azure MAI:   {} región={}",
-            if azure_mai_enabled { "✅ activo" } else { "☐ inactivo" },
-            if azure_mai_region.is_empty() { "—" } else { &azure_mai_region }
-        );
-        log::info!(
-            "TTS:         {} voz={} gemini_key={}",
-            if tts_enabled { "✅ activo" } else { "☐ inactivo" },
-            tts_voice,
-            if gemini_api_key.is_empty() { "vacía" } else { "configurada" }
-        );
+        log_azure_status(&settings);
+        log_tts_status(&settings);
 
         let (ui_tx, ui_rx) = mpsc::channel();
 
         WhisperApp {
             config,
             db,
+            settings: Arc::new(Mutex::new(settings)),
             app_state: Arc::new(Mutex::new(AppState::Idle)),
             recorder: Arc::new(Mutex::new(Recorder::new())),
-            translate_enabled: Arc::new(Mutex::new(translate_enabled)),
-            translate_dest_lang: Arc::new(Mutex::new(translate_dest_lang)),
-            translate_provider: Arc::new(Mutex::new(translate_provider)),
-            translate_ollama_prompt: Arc::new(Mutex::new(translate_ollama_prompt)),
-            azure_mai_enabled: Arc::new(Mutex::new(azure_mai_enabled)),
-            azure_mai_key: Arc::new(Mutex::new(azure_mai_key)),
-            azure_mai_region: Arc::new(Mutex::new(azure_mai_region)),
-            azure_mai_model: Arc::new(Mutex::new(azure_mai_model)),
-            azure_mai_api_version: Arc::new(Mutex::new(azure_mai_api_version)),
-            azure_mai_definition: Arc::new(Mutex::new(azure_mai_definition)),
-            tts_enabled: Arc::new(Mutex::new(tts_enabled)),
-            tts_provider: Arc::new(Mutex::new(tts_provider)),
-            tts_qwen_prompt: Arc::new(Mutex::new(tts_qwen_prompt)),
-            tts_qwen_temperature: Arc::new(Mutex::new(tts_qwen_temperature)),
-            tts_voice: Arc::new(Mutex::new(tts_voice)),
-            gemini_api_key: Arc::new(Mutex::new(gemini_api_key)),
-            tts_scene: Arc::new(Mutex::new(tts_scene)),
-            tts_sample_context: Arc::new(Mutex::new(tts_sample_context)),
-            tts_formatter_enabled: Arc::new(Mutex::new(tts_formatter_enabled)),
-            tts_formatter_prompt: Arc::new(Mutex::new(tts_formatter_prompt)),
-            tts_playback_rate: Arc::new(Mutex::new(tts_playback_rate)),
-            tts_show_modal: Arc::new(Mutex::new(tts_show_modal)),
             ui_tx,
             ui_rx,
             tray: None,
@@ -209,13 +130,10 @@ impl WhisperApp {
         let cli_item = MenuItem::new(cli_label, false, None);
         let model_item = MenuItem::new(model_label, false, None);
         // ── Azure MAI ─────────────────────────────────────────────────────────
-        let azure_enabled_val = *self.azure_mai_enabled.lock().unwrap();
-        let azure_region_val = self.azure_mai_region.lock().unwrap().clone();
-        let azure_item = MenuItem::new(
-            azure_status_label(azure_enabled_val, &azure_region_val),
-            false,
-            None,
-        );
+        let azure_item = {
+            let s = self.settings.lock().unwrap();
+            MenuItem::new(azure_status_label(s.azure_mai_enabled, &s.azure_mai_region), false, None)
+        };
 
         let settings_item = MenuItem::new("Configuración...", true, None);
         let settings_id = settings_item.id().clone();
@@ -297,93 +215,18 @@ impl WhisperApp {
         });
     }
 
-    fn apply_settings(&self, v: SettingsValues) {
-        // Traducción
-        *self.translate_enabled.lock().unwrap() = v.translate_enabled;
-        self.db.set("translate_enabled", if v.translate_enabled { "true" } else { "false" });
-        *self.translate_dest_lang.lock().unwrap() = v.translate_dest.clone();
-        self.db.set("translate_dest_lang", &v.translate_dest);
-        *self.translate_provider.lock().unwrap() = v.translate_provider.clone();
-        self.db.set("translate_provider", &v.translate_provider);
-        *self.translate_ollama_prompt.lock().unwrap() = v.translate_ollama_prompt.clone();
-        self.db.set("translate_ollama_prompt", &v.translate_ollama_prompt);
+    fn apply_settings(&self, new: Settings) {
+        let mut current = self.settings.lock().unwrap();
+        let new = new.sanitized(&current);
+        new.save(&self.db);
 
-        // Azure MAI Transcribe
-        *self.azure_mai_enabled.lock().unwrap() = v.azure_mai_enabled;
-        self.db.set("azure_mai_enabled", if v.azure_mai_enabled { "true" } else { "false" });
-        *self.azure_mai_key.lock().unwrap() = v.azure_mai_key.clone();
-        self.db.set("azure_mai_key", &v.azure_mai_key);
-        *self.azure_mai_region.lock().unwrap() = v.azure_mai_region.clone();
-        self.db.set("azure_mai_region", &v.azure_mai_region);
-        *self.azure_mai_model.lock().unwrap() = v.azure_mai_model.clone();
-        self.db.set("azure_mai_model", &v.azure_mai_model);
-        let api_ver = if v.azure_mai_api_version.is_empty() {
-            defaults::AZURE_MAI_API_VERSION.to_string()
-        } else {
-            v.azure_mai_api_version.clone()
-        };
-        // Un Definition inválido no se nota al guardar: revienta después, al
-        // transcribir, con un HTTP 400 de Azure. Se valida aquí y se conserva el
-        // valor anterior antes que persistir algo que rompe la transcripción.
-        let definition = if v.azure_mai_definition.is_empty() {
-            defaults::AZURE_MAI_DEFINITION.to_string()
-        } else if serde_json::from_str::<serde_json::Value>(&v.azure_mai_definition).is_err() {
-            log::error!(
-                "Azure MAI: Definition JSON inválido, se conserva el anterior. \
-                 Revisa que las comillas sean rectas (\") y no tipográficas: {}",
-                v.azure_mai_definition
-            );
-            self.azure_mai_definition.lock().unwrap().clone()
-        } else {
-            v.azure_mai_definition.clone()
-        };
-        *self.azure_mai_api_version.lock().unwrap() = api_ver.clone();
-        self.db.set("azure_mai_api_version", &api_ver);
-        *self.azure_mai_definition.lock().unwrap() = definition.clone();
-        self.db.set("azure_mai_definition", &definition);
         if let Some(ref item) = self.azure_item {
-            item.set_text(azure_status_label(v.azure_mai_enabled, &v.azure_mai_region));
+            item.set_text(azure_status_label(new.azure_mai_enabled, &new.azure_mai_region));
         }
-        log::info!(
-            "Azure MAI: {} región={} api-version={} definition={}",
-            if v.azure_mai_enabled { "activo" } else { "inactivo" },
-            if v.azure_mai_region.is_empty() { "—" } else { &v.azure_mai_region },
-            api_ver,
-            definition,
-        );
+        log_azure_status(&new);
+        log_tts_status(&new);
 
-        // TTS
-        *self.tts_enabled.lock().unwrap() = v.tts_enabled;
-        self.db.set("tts_enabled", if v.tts_enabled { "true" } else { "false" });
-        *self.tts_provider.lock().unwrap() = v.tts_provider.clone();
-        self.db.set("tts_provider", &v.tts_provider);
-        *self.tts_qwen_prompt.lock().unwrap() = v.tts_qwen_prompt.clone();
-        self.db.set("tts_qwen_prompt", &v.tts_qwen_prompt);
-        *self.tts_qwen_temperature.lock().unwrap() = v.tts_qwen_temperature.clone();
-        self.db.set("tts_qwen_temperature", &v.tts_qwen_temperature);
-        *self.tts_voice.lock().unwrap() = v.tts_voice.clone();
-        self.db.set("tts_voice", &v.tts_voice);
-        *self.gemini_api_key.lock().unwrap() = v.gemini_api_key.clone();
-        self.db.set("gemini_api_key", &v.gemini_api_key);
-        *self.tts_scene.lock().unwrap() = v.tts_scene.clone();
-        self.db.set("tts_scene", &v.tts_scene);
-        *self.tts_sample_context.lock().unwrap() = v.tts_sample_context.clone();
-        self.db.set("tts_sample_context", &v.tts_sample_context);
-        *self.tts_formatter_enabled.lock().unwrap() = v.tts_formatter_enabled;
-        self.db.set("tts_formatter_enabled", if v.tts_formatter_enabled { "true" } else { "false" });
-        *self.tts_formatter_prompt.lock().unwrap() = v.tts_formatter_prompt.clone();
-        self.db.set("tts_formatter_prompt", &v.tts_formatter_prompt);
-        *self.tts_playback_rate.lock().unwrap() = v.tts_playback_rate.clone();
-        self.db.set("tts_playback_rate", &v.tts_playback_rate);
-        *self.tts_show_modal.lock().unwrap() = v.tts_show_modal;
-        self.db.set("tts_show_modal", if v.tts_show_modal { "true" } else { "false" });
-        log::info!(
-            "TTS: {} voz={} gemini_key={}",
-            if v.tts_enabled { "activo" } else { "inactivo" },
-            v.tts_voice,
-            if v.gemini_api_key.is_empty() { "vacía" } else { "configurada" },
-        );
-
+        *current = new;
         log::info!("Configuración aplicada");
     }
 }
@@ -407,7 +250,7 @@ impl ApplicationHandler for WhisperApp {
                 match msg {
                     UiMsg::SetTitle(title) => {
                         log::debug!("UI: set_title → {}", title);
-                        let _ = tray.set_title(Some(title));
+                        tray.set_title(Some(title));
                     }
                     UiMsg::PasteText(text) => {
                         log::debug!("UI: paste_text ({} chars)", text.chars().count());
@@ -428,30 +271,7 @@ impl ApplicationHandler for WhisperApp {
                     .arg(logger::log_path())
                     .spawn();
             } else if self.settings_id.as_ref() == Some(event.id()) {
-                let current = SettingsValues {
-                    translate_enabled: *self.translate_enabled.lock().unwrap(),
-                    translate_dest: self.translate_dest_lang.lock().unwrap().clone(),
-                    translate_provider: self.translate_provider.lock().unwrap().clone(),
-                    translate_ollama_prompt: self.translate_ollama_prompt.lock().unwrap().clone(),
-                    azure_mai_enabled: *self.azure_mai_enabled.lock().unwrap(),
-                    azure_mai_key: self.azure_mai_key.lock().unwrap().clone(),
-                    azure_mai_region: self.azure_mai_region.lock().unwrap().clone(),
-                    azure_mai_model: self.azure_mai_model.lock().unwrap().clone(),
-                    azure_mai_api_version: self.azure_mai_api_version.lock().unwrap().clone(),
-                    azure_mai_definition: self.azure_mai_definition.lock().unwrap().clone(),
-                    tts_enabled: *self.tts_enabled.lock().unwrap(),
-                    tts_provider: self.tts_provider.lock().unwrap().clone(),
-                    tts_qwen_prompt: self.tts_qwen_prompt.lock().unwrap().clone(),
-                    tts_qwen_temperature: self.tts_qwen_temperature.lock().unwrap().clone(),
-                    tts_voice: self.tts_voice.lock().unwrap().clone(),
-                    gemini_api_key: self.gemini_api_key.lock().unwrap().clone(),
-                    tts_scene: self.tts_scene.lock().unwrap().clone(),
-                    tts_sample_context: self.tts_sample_context.lock().unwrap().clone(),
-                    tts_formatter_enabled: *self.tts_formatter_enabled.lock().unwrap(),
-                    tts_formatter_prompt: self.tts_formatter_prompt.lock().unwrap().clone(),
-                    tts_playback_rate: self.tts_playback_rate.lock().unwrap().clone(),
-                    tts_show_modal: *self.tts_show_modal.lock().unwrap(),
-                };
+                let current = self.settings.lock().unwrap().clone();
                 if let Some(values) = show_settings_modal(&current) {
                     self.apply_settings(values);
                 }
@@ -460,6 +280,9 @@ impl ApplicationHandler for WhisperApp {
 
         // Eventos de hotkey
         if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            // Snapshot: el worker de transcripción trabaja con la config del
+            // momento en que se soltó la tecla, sin bloquear la UI.
+            let settings = self.settings.lock().unwrap().clone();
             if Some(event.id) == self.hotkey_id {
                 match event.state {
                     HotKeyState::Pressed => handle_hotkey_pressed(
@@ -467,33 +290,20 @@ impl ApplicationHandler for WhisperApp {
                         &self.recorder,
                         &self.config,
                         &self.ui_tx,
-                        &self.azure_mai_enabled,
-                        &self.azure_mai_key,
-                        &self.azure_mai_region,
+                        &settings,
                     ),
                     HotKeyState::Released => handle_hotkey_released(
                         &self.app_state,
                         &self.recorder,
                         &self.config,
                         &self.ui_tx,
-                        &self.azure_mai_enabled,
-                        &self.azure_mai_key,
-                        &self.azure_mai_region,
-                        &self.azure_mai_model,
-                        &self.azure_mai_api_version,
-                        &self.azure_mai_definition,
-                        &self.translate_enabled,
-                        &self.translate_dest_lang,
-                        &self.translate_provider,
-                        &self.translate_ollama_prompt,
+                        settings,
                     ),
                 }
             } else if Some(event.id) == self.replay_hotkey_id
                 && event.state == HotKeyState::Pressed
             {
-                let rate       = self.tts_playback_rate.lock().unwrap().parse::<f32>().unwrap_or(1.0);
-                let show_modal = *self.tts_show_modal.lock().unwrap();
-                replay_last_tts(rate, show_modal);
+                replay_last_tts(settings.playback_rate(), settings.tts_show_modal);
             } else if Some(event.id) == self.modal_hotkey_id
                 && event.state == HotKeyState::Pressed
             {
@@ -506,24 +316,6 @@ impl ApplicationHandler for WhisperApp {
             Instant::now() + Duration::from_millis(20),
         ));
     }
-}
-
-/// Migra la definition de Azure MAI de una versión anterior a la actual.
-///
-/// El valor vive en SQLite, así que cambiar el default de `defaults.rs` no basta:
-/// las instalaciones existentes seguirían llamando a MAI-Transcribe-1.5. Solo se
-/// reemplaza si el valor guardado coincide exactamente con un default antiguo —
-/// si el usuario lo editó, se respeta.
-fn migrate_mai_definition(db: &db::Db) -> String {
-    let stored = db.get("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
-
-    if defaults::AZURE_MAI_LEGACY_DEFINITIONS.contains(&stored.as_str()) {
-        log::info!("Azure MAI: migrando definition a MAI-Transcribe-2");
-        db.set("azure_mai_definition", defaults::AZURE_MAI_DEFINITION);
-        return defaults::AZURE_MAI_DEFINITION.to_string();
-    }
-
-    stored
 }
 
 fn main() {
@@ -552,6 +344,26 @@ fn install_panic_hook() {
         let bt = std::backtrace::Backtrace::force_capture();
         log::error!("PANIC backtrace:\n{:?}", bt);
     }));
+}
+
+fn log_azure_status(s: &Settings) {
+    log::info!(
+        "Azure MAI:   {} región={} api-version={} definition={}",
+        if s.azure_mai_enabled { "✅ activo" } else { "☐ inactivo" },
+        if s.azure_mai_region.is_empty() { "—" } else { &s.azure_mai_region },
+        s.azure_mai_api_version,
+        s.azure_mai_definition,
+    );
+}
+
+fn log_tts_status(s: &Settings) {
+    log::info!(
+        "TTS:         {} proveedor={} voz={} gemini_key={}",
+        if s.tts_enabled { "✅ activo" } else { "☐ inactivo" },
+        s.tts_provider,
+        s.tts_voice,
+        if s.gemini_api_key.is_empty() { "vacía" } else { "configurada" }
+    );
 }
 
 /// Verifica si el proceso tiene permiso de Accessibility en macOS
@@ -585,18 +397,7 @@ fn replay_last_tts(rate: f32, show_modal: bool) {
     match tts::last_audio_path() {
         Some(path) if path.exists() => {
             log::info!("TTS replay: reproduciendo {:?}", path);
-            std::thread::spawn(move || {
-                let mut cmd = std::process::Command::new("afplay");
-                if (rate - 1.0).abs() > 0.01 {
-                    cmd.args(["-r", &format!("{:.2}", rate), "-q", "1"]);
-                }
-                cmd.arg(&path);
-                if let Ok(mut child) = cmd.spawn() {
-                    let _ = std::fs::write("/tmp/whisper-tts-afplay.pid", child.id().to_string());
-                    let _ = child.wait();
-                    let _ = std::fs::remove_file("/tmp/whisper-tts-afplay.pid");
-                }
-            });
+            std::thread::spawn(move || tts::play_wav(&path, rate));
         }
         _ => log::info!("TTS replay: no hay audio previo para reproducir"),
     }
@@ -647,23 +448,16 @@ fn show_last_tts_modal() {
 fn handle_hotkey_pressed(
     app_state: &Arc<Mutex<AppState>>,
     recorder: &Arc<Mutex<Recorder>>,
-    config: &Arc<Config>,
+    config: &Config,
     ui_tx: &mpsc::Sender<UiMsg>,
-    azure_mai_enabled: &Arc<Mutex<bool>>,
-    azure_mai_key: &Arc<Mutex<String>>,
-    azure_mai_region: &Arc<Mutex<String>>,
+    settings: &Settings,
 ) {
     let mut state = app_state.lock().unwrap();
 
     match *state {
         AppState::Idle => {
             // Permitir grabación si whisper local está listo O si Azure MAI está configurado
-            let azure_on = *azure_mai_enabled.lock().unwrap();
-            let azure_key = azure_mai_key.lock().unwrap().clone();
-            let azure_region = azure_mai_region.lock().unwrap().clone();
-            let azure_ready = azure_on && !azure_key.is_empty() && !azure_region.is_empty();
-
-            if !azure_ready && !config.is_valid() {
+            if !settings.azure_ready() && !config.is_valid() {
                 log::warn!(
                     "Config inválida: verifica whisper-cli y modelo, o activa Azure MAI con clave y región"
                 );
@@ -689,144 +483,123 @@ fn handle_hotkey_pressed(
 fn handle_hotkey_released(
     app_state: &Arc<Mutex<AppState>>,
     recorder: &Arc<Mutex<Recorder>>,
-    config: &Arc<Config>,
+    config: &Config,
     ui_tx: &mpsc::Sender<UiMsg>,
-    azure_mai_enabled: &Arc<Mutex<bool>>,
-    azure_mai_key: &Arc<Mutex<String>>,
-    azure_mai_region: &Arc<Mutex<String>>,
-    azure_mai_model_ref: &Arc<Mutex<String>>,
-    azure_mai_api_version_ref: &Arc<Mutex<String>>,
-    azure_mai_definition_ref: &Arc<Mutex<String>>,
-    translate_enabled: &Arc<Mutex<bool>>,
-    translate_dest_lang: &Arc<Mutex<String>>,
-    translate_provider_ref: &Arc<Mutex<String>>,
-    translate_ollama_prompt_ref: &Arc<Mutex<String>>,
+    settings: Settings,
 ) {
     let mut state = app_state.lock().unwrap();
+    if *state != AppState::Recording {
+        // Released sin grabación activa — ignorar
+        return;
+    }
 
-    match *state {
-        AppState::Recording => {
-            let mut rec = recorder.lock().unwrap();
-            let duration_result = rec.stop();
-            let audio_path = rec.output_path().to_string();
-            drop(rec);
+    let mut rec = recorder.lock().unwrap();
+    let duration_result = rec.stop();
+    let audio_path = rec.output_path().to_string();
+    drop(rec);
 
-            match duration_result {
-                Ok(dur) if dur < config.min_recording_duration => {
-                    log::warn!(
-                        "Grabación muy corta ({:.1}s < {:.1}s mínimo), ignorando",
-                        dur, config.min_recording_duration
-                    );
-                    *state = AppState::Idle;
-                    let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
-                }
-                Ok(dur) => {
-                    log::info!("⏳ Transcribiendo {:.1}s de audio...", dur);
-                    *state = AppState::Processing;
-                    let _ = ui_tx.send(UiMsg::SetTitle("⏳"));
-                    drop(state);
-
-                    let app_state = app_state.clone();
-                    let ui_tx = ui_tx.clone();
-                    let cli = config.whisper_cli_path.clone();
-                    let model = config.model_path.clone();
-                    // Azure MAI
-                    let use_azure = *azure_mai_enabled.lock().unwrap();
-                    let azure_key = azure_mai_key.lock().unwrap().clone();
-                    let azure_region = azure_mai_region.lock().unwrap().clone();
-                    let _azure_model = azure_mai_model_ref.lock().unwrap().clone();
-                    let azure_api_version = azure_mai_api_version_ref.lock().unwrap().clone();
-                    let azure_definition = azure_mai_definition_ref.lock().unwrap().clone();
-                    // Traducción
-                    let do_translate = *translate_enabled.lock().unwrap();
-                    let dest_lang = translate_dest_lang.lock().unwrap().clone();
-                    let translate_provider = translate_provider_ref.lock().unwrap().clone();
-                    let translate_ollama_prompt = translate_ollama_prompt_ref.lock().unwrap().clone();
-                    std::thread::spawn(move || {
-                        log::info!("🧭 Paso 1: iniciando transcripción");
-                        // Elegir backend: Azure MAI o local whisper-cli
-                        let transcription_result = if use_azure {
-                            log::info!("🔵 Azure MAI: transcribiendo (región={})...", azure_region);
-                            azure_transcriber::transcribe(
-                                &azure_key,
-                                &azure_region,
-                                &azure_api_version,
-                                &azure_definition,
-                                &audio_path,
-                            )
-                        } else {
-                            transcriber::transcribe(&cli, &model, defaults::LANGUAGE, &audio_path)
-                        };
-
-                        match transcription_result {
-                            Ok(text) => {
-                                log::info!("✅ Transcripción: \"{}\"", text);
-
-                                // Paso opcional: traducción
-                                let final_text = if do_translate {
-                                    let skip = match translate_provider.as_str() {
-                                        "ollama" => false,
-                                        _ => azure_key.is_empty() || azure_region.is_empty(),
-                                    };
-                                    if skip {
-                                        log::info!("Traducción: credenciales Azure no configuradas, omitiendo");
-                                        text
-                                    } else {
-                                        let provider = translator::create_translator(
-                                            &translate_provider,
-                                            &azure_key,
-                                            &azure_region,
-                                            &translate_ollama_prompt,
-                                        );
-                                        log::info!("🌐 Traduciendo a '{}' ({})...", dest_lang, translate_provider);
-                                        match provider.translate(&text, &dest_lang) {
-                                            Ok(result) => {
-                                                if result.was_translated {
-                                                    log::info!(
-                                                        "✅ Traducción: '{}' → '{}': \"{}\"",
-                                                        result.detected_lang, dest_lang, result.text
-                                                    );
-                                                }
-                                                result.text
-                                            }
-                                            Err(e) => {
-                                                log::error!("❌ Traducción falló, usando texto original: {}", e);
-                                                text
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    text
-                                };
-
-                                if ui_tx.send(UiMsg::PasteText(final_text)).is_err() {
-                                    log::error!("No se pudo enviar PasteText al hilo UI");
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("❌ Transcripción falló: {}", e);
-                            }
-                        }
-                        let mut s = app_state.lock().unwrap();
-                        *s = AppState::Idle;
-                        let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
-                    });
-                }
-                Err(e) => {
-                    if e.starts_with("No se capturó audio") {
-                        log::warn!("Grabación descartada: {}", e);
-                    } else {
-                        log::error!("Error al detener grabación: {}", e);
-                    }
-                    *state = AppState::Idle;
-                    let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
-                }
-            }
+    match duration_result {
+        Ok(dur) if dur < config.min_recording_duration => {
+            log::warn!(
+                "Grabación muy corta ({:.1}s < {:.1}s mínimo), ignorando",
+                dur, config.min_recording_duration
+            );
+            *state = AppState::Idle;
+            let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
         }
-        AppState::Idle | AppState::Processing => {
-            // Released sin grabación activa — ignorar
+        Ok(dur) => {
+            log::info!("⏳ Transcribiendo {:.1}s de audio...", dur);
+            *state = AppState::Processing;
+            let _ = ui_tx.send(UiMsg::SetTitle("⏳"));
+            drop(state);
+
+            let app_state = app_state.clone();
+            let ui_tx = ui_tx.clone();
+            let cli = config.whisper_cli_path.clone();
+            let model = config.model_path.clone();
+            std::thread::spawn(move || {
+                match transcribe(&audio_path, &cli, &model, &settings) {
+                    Ok(text) => {
+                        log::info!("✅ Transcripción: \"{}\"", text);
+                        let final_text = translate_if_enabled(text, &settings);
+                        if ui_tx.send(UiMsg::PasteText(final_text)).is_err() {
+                            log::error!("No se pudo enviar PasteText al hilo UI");
+                        }
+                    }
+                    Err(e) => log::error!("❌ Transcripción falló: {}", e),
+                }
+                *app_state.lock().unwrap() = AppState::Idle;
+                let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
+            });
+        }
+        Err(e) => {
+            if e.starts_with("No se capturó audio") {
+                log::warn!("Grabación descartada: {}", e);
+            } else {
+                log::error!("Error al detener grabación: {}", e);
+            }
+            *state = AppState::Idle;
+            let _ = ui_tx.send(UiMsg::SetTitle("🎙"));
         }
     }
+}
+
+/// Transcribe con Azure MAI si está activo; si no, con whisper-cli local.
+fn transcribe(audio_path: &str, cli: &str, model: &str, s: &Settings) -> Result<String, String> {
+    log::info!("🧭 Paso 1: iniciando transcripción");
+    if s.azure_mai_enabled {
+        log::info!("🔵 Azure MAI: transcribiendo (región={})...", s.azure_mai_region);
+        azure_transcriber::transcribe(
+            &s.azure_mai_key,
+            &s.azure_mai_region,
+            &s.azure_mai_api_version,
+            &s.azure_mai_definition,
+            audio_path,
+        )
+    } else {
+        transcriber::transcribe(cli, model, defaults::LANGUAGE, audio_path)
+    }
+}
+
+/// Paso opcional: traduce al idioma destino. Ante cualquier fallo devuelve el
+/// texto original — mejor pegar algo sin traducir que no pegar nada.
+fn translate_if_enabled(text: String, s: &Settings) -> String {
+    if !s.translate_enabled {
+        return text;
+    }
+    if s.translate_provider != "ollama" && !s.has_azure_credentials() {
+        log::info!("Traducción: credenciales Azure no configuradas, omitiendo");
+        return text;
+    }
+
+    let provider = translator::create_translator(
+        &s.translate_provider,
+        &s.azure_mai_key,
+        &s.azure_mai_region,
+        &s.translate_ollama_prompt,
+    );
+    log::info!("🌐 Traduciendo a '{}' ({})...", s.translate_dest, s.translate_provider);
+    match provider.translate(&text, &s.translate_dest) {
+        Ok(result) => {
+            if result.was_translated {
+                log::info!(
+                    "✅ Traducción: '{}' → '{}': \"{}\"",
+                    result.detected_lang, s.translate_dest, result.text
+                );
+            }
+            result.text
+        }
+        Err(e) => {
+            log::error!("❌ Traducción falló, usando texto original: {}", e);
+            text
+        }
+    }
+}
+
+/// Contenido del portapapeles a restaurar después de pegar.
+enum ClipboardBackup {
+    Text(String),
+    Image(arboard::ImageData<'static>),
 }
 
 fn paste_text(text: &str) {
@@ -835,7 +608,13 @@ fn paste_text(text: &str) {
         Err(e) => { log::error!("Error accediendo al clipboard: {}", e); return; }
     };
 
-    let previous = clipboard.get_text().ok();
+    // La imagen solo se lee si no hay texto: convertirla a RGBA cuesta y el
+    // caso habitual es texto.
+    let previous = clipboard
+        .get_text()
+        .ok()
+        .map(ClipboardBackup::Text)
+        .or_else(|| clipboard.get_image().ok().map(ClipboardBackup::Image));
 
     if let Err(e) = clipboard.set_text(text) {
         log::error!("Error escribiendo al clipboard: {}", e);
@@ -852,11 +631,15 @@ fn paste_text(text: &str) {
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        if let Some(prev) = previous {
-            if let Ok(mut cb) = arboard::Clipboard::new() {
-                let _ = cb.set_text(&prev);
-                log::debug!("Clipboard original restaurado");
-            }
+        let Some(prev) = previous else { return };
+        let Ok(mut cb) = arboard::Clipboard::new() else { return };
+        let restored = match prev {
+            ClipboardBackup::Text(t) => cb.set_text(t),
+            ClipboardBackup::Image(img) => cb.set_image(img),
+        };
+        match restored {
+            Ok(()) => log::debug!("Clipboard original restaurado"),
+            Err(e) => log::warn!("No se pudo restaurar el clipboard original: {}", e),
         }
     });
 }
@@ -890,13 +673,13 @@ fn probe_microphone() {
         _ => return,
     };
     match result {
-        Ok(_stream) => log::info!("Micrófono: ✅ permiso concedido"),
+        Ok(()) => log::info!("Micrófono: ✅ permiso concedido"),
         Err(e) => {
             log::warn!("Micrófono: ❌ sin permiso ({})", e);
             log::warn!("→ System Settings → Privacy & Security → Microphone → activa whisperwlopezob");
         }
     }
-    // _stream se descarta aquí, liberando el audio unit
+    // El stream ya se descartó en el .map(), liberando el audio unit
 }
 
 /// Genera la etiqueta del ítem Azure MAI en el tray menu

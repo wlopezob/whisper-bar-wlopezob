@@ -12,32 +12,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-pub struct SettingsValues {
-    pub translate_enabled: bool,
-    pub translate_dest: String,
-    pub translate_provider: String,
-    pub translate_ollama_prompt: String,
-    // Azure MAI Transcribe
-    pub azure_mai_enabled: bool,
-    pub azure_mai_key: String,
-    pub azure_mai_region: String,
-    pub azure_mai_model: String,
-    pub azure_mai_api_version: String,
-    pub azure_mai_definition: String,
-    // TTS
-    pub tts_enabled: bool,
-    pub tts_provider: String,
-    pub tts_qwen_prompt: String,
-    pub tts_qwen_temperature: String,
-    pub tts_voice: String,
-    pub gemini_api_key: String,
-    pub tts_scene: String,
-    pub tts_sample_context: String,
-    pub tts_formatter_enabled: bool,
-    pub tts_formatter_prompt: String,
-    pub tts_playback_rate: String,
-    pub tts_show_modal: bool,
-}
+use crate::settings::Settings;
 
 // ── Thread-local: referencias a los campos de Azure para el callback ─────────
 
@@ -46,7 +21,6 @@ struct AzureFieldPtrs {
     tf_key: *const NSTextField,
     tf_region: *const NSTextField,
     tf_api_version: *const NSTextField,
-    txt_definition: *const NSTextView,
     scroll_definition: *const NSScrollView,
     lbl_key: *const NSTextField,
     lbl_region: *const NSTextField,
@@ -260,7 +234,7 @@ fn input_field(
 
 // ── API pública ───────────────────────────────────────────────────────────────
 
-pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
+pub fn show_settings_modal(current: &Settings) -> Option<Settings> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
 
@@ -362,7 +336,6 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
             tf_key: &*tf_key as *const NSTextField,
             tf_region: &*tf_region as *const NSTextField,
             tf_api_version: &*tf_api_version as *const NSTextField,
-            txt_definition: &*txt_definition as *const NSTextView,
             scroll_definition: &*scroll_definition as *const NSScrollView,
             lbl_key: &*lbl_key as *const NSTextField,
             lbl_region: &*lbl_region as *const NSTextField,
@@ -685,6 +658,16 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     });
     content.addSubview(&chk_show_modal);
 
+    // ── Filtro por nombre de sesión (/rename en Claude Code) ─────────────────
+    content.addSubview(&label("Sesiones a escuchar:", 20.0, 203.0, 135.0, mtm));
+    let tf_tts_sessions = input_field(&current.tts_sessions, 160.0, 200.0, 240.0, mtm);
+    tf_tts_sessions.setPlaceholderString(Some(&NSString::from_str("todas")));
+    content.addSubview(&tf_tts_sessions);
+    content.addSubview(&label(
+        "Nombres de /rename separados por comas. Vacío = todas.",
+        20.0, 176.0, 380.0, mtm,
+    ));
+
     // ── Montar content en scroll y scroll en panel ────────────────────────────
     scroll_settings.setDocumentView(Some(&content));
     cv.addSubview(&scroll_settings);
@@ -757,7 +740,6 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
     let azure_mai_enabled = seg_backend.selectedSegment() == 1;
     let azure_mai_key = tf_key.stringValue().to_string().trim().to_string();
     let azure_mai_region = tf_region.stringValue().to_string().trim().to_string();
-    let azure_mai_model = String::new(); // campo eliminado de UI; modelo va dentro de definition JSON
     let azure_mai_api_version = tf_api_version.stringValue().to_string().trim().to_string();
     let azure_mai_definition = txt_definition.string().to_string().trim().to_string();
 
@@ -821,8 +803,9 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
         if v.parse::<f32>().is_ok() { v } else { crate::defaults::TTS_DEFAULT_PLAYBACK_RATE.to_string() }
     };
     let tts_show_modal = chk_show_modal.state() == NSControlStateValueOn;
+    let tts_sessions = tf_tts_sessions.stringValue().to_string().trim().to_string();
 
-    Some(SettingsValues {
+    Some(Settings {
         translate_enabled,
         translate_dest,
         translate_provider,
@@ -830,7 +813,6 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
         azure_mai_enabled,
         azure_mai_key,
         azure_mai_region,
-        azure_mai_model,
         azure_mai_api_version,
         azure_mai_definition,
         tts_enabled,
@@ -845,5 +827,6 @@ pub fn show_settings_modal(current: &SettingsValues) -> Option<SettingsValues> {
         tts_formatter_prompt,
         tts_playback_rate,
         tts_show_modal,
+        tts_sessions,
     })
 }

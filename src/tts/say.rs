@@ -1,17 +1,9 @@
 // src/tts/say.rs
 // Fallback TTS local usando el comando `say` de macOS.
 
-use super::provider::TtsProvider;
+use super::SAY_PID_FILE;
 
 pub struct SayProvider;
-
-impl TtsProvider for SayProvider {
-    fn name(&self) -> &'static str {
-        "say"
-    }
-}
-
-const SAY_PID_FILE: &str = "/tmp/whisper-tts-say.pid";
 
 fn detect_voice(text: &str) -> &'static str {
     let spanish_chars = ['á','é','í','ó','ú','ü','ñ','Á','É','Í','Ó','Ú','Ü','Ñ'];

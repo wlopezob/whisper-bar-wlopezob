@@ -16,7 +16,3 @@ pub struct TtsConfig {
     pub qwen_prompt: String,
     pub qwen_temperature: f32,
 }
-
-pub trait TtsProvider {
-    fn name(&self) -> &'static str;
-}

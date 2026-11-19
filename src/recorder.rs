@@ -253,12 +253,19 @@ fn resample(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
     // 48 kHz a 16 kHz, un sonido de 13 kHz reaparece como 3 kHz, justo sobre
     // los formantes que distinguen las vocales. Hay que quitarlo ANTES de
     // descartar muestras: después el alias es indistinguible de la señal real.
-    let filtered: Vec<i16>;
-    let samples = if source_rate > target_rate {
-        filtered = lowpass(samples, source_rate, target_rate);
-        &filtered
-    } else {
-        samples
+    let kernel = (source_rate > target_rate).then(|| {
+        // Corte expresado como fracción de la frecuencia de muestreo de origen.
+        antialias_kernel((target_rate as f64 / 2.0) * ANTIALIAS_CUTOFF / source_rate as f64)
+    });
+
+    // El filtro solo se evalúa en las muestras de origen que se usan: con
+    // 48 → 16 kHz (ratio entero, frac = 0) es 1 de cada 3, en vez de filtrar
+    // toda la señal y tirar el resto. Importa porque stop() corre en el hilo UI.
+    let value_at = |idx: usize| -> f64 {
+        match &kernel {
+            Some(k) => lowpass_at(samples, k, idx),
+            None => samples[idx] as f64,
+        }
     };
 
     let ratio = source_rate as f64 / target_rate as f64;
@@ -270,13 +277,13 @@ fn resample(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
         let idx = src_pos as usize;
         let frac = src_pos - idx as f64;
 
-        let sample = if idx + 1 < samples.len() {
-            // Interpolación lineal entre dos muestras adyacentes
-            samples[idx] as f64 * (1.0 - frac) + samples[idx + 1] as f64 * frac
-        } else if idx < samples.len() {
-            samples[idx] as f64
-        } else {
+        let sample = if idx >= samples.len() {
             0.0
+        } else if frac < 1e-9 || idx + 1 >= samples.len() {
+            value_at(idx)
+        } else {
+            // Interpolación lineal entre dos muestras adyacentes
+            value_at(idx) * (1.0 - frac) + value_at(idx + 1) * frac
         };
 
         output.push(sample.clamp(-32768.0, 32767.0) as i16);
@@ -285,27 +292,19 @@ fn resample(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
     output
 }
 
-/// Aplica un paso-bajo FIR que elimina lo que quedaría por encima de la
-/// Nyquist del destino. Convolución centrada: fuera de los extremos se asume
-/// silencio, así que el audio no se desplaza respecto al original.
-fn lowpass(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
-    // Corte expresado como fracción de la frecuencia de muestreo de origen.
-    let cutoff = (target_rate as f64 / 2.0) * ANTIALIAS_CUTOFF / source_rate as f64;
-    let kernel = antialias_kernel(cutoff);
+/// Salida del paso-bajo FIR en la posición `i`. Convolución centrada: fuera de
+/// los extremos se asume silencio, así que el audio no se desplaza respecto al
+/// original.
+fn lowpass_at(samples: &[i16], kernel: &[f64], i: usize) -> f64 {
     let half = kernel.len() / 2;
-
-    let mut out = Vec::with_capacity(samples.len());
-    for i in 0..samples.len() {
-        let mut acc = 0.0;
-        for (k, coef) in kernel.iter().enumerate() {
-            let idx = i as isize + k as isize - half as isize;
-            if idx >= 0 && (idx as usize) < samples.len() {
-                acc += samples[idx as usize] as f64 * coef;
-            }
-        }
-        out.push(acc.clamp(-32768.0, 32767.0) as i16);
-    }
-    out
+    let start = i.saturating_sub(half);
+    let end = (i + half + 1).min(samples.len());
+    // kernel[k] multiplica a samples[i + k - half]
+    samples[start..end]
+        .iter()
+        .zip(&kernel[start + half - i..])
+        .map(|(&s, &c)| s as f64 * c)
+        .sum()
 }
 
 /// Sinc enventanado con Hamming, normalizado a ganancia unidad en continua.
@@ -418,6 +417,26 @@ mod tests {
             "el filtro se está comiendo la voz: {:.1} → {:.1}",
             antes, despues
         );
+    }
+
+    #[test]
+    fn test_lowpass_at_coincide_con_la_convolucion_directa() {
+        // Los bordes (i < half, i > len - half) son donde el cálculo de
+        // índices de lowpass_at puede equivocarse.
+        let kernel = antialias_kernel(0.15);
+        let half = kernel.len() / 2;
+        let entrada = tono(440.0, 48_000.0, 400);
+        for i in [0, 1, half - 1, half, half + 1, 200, 400 - half, 398, 399] {
+            let directa: f64 = (0..kernel.len())
+                .filter_map(|k| {
+                    let j = i as isize + k as isize - half as isize;
+                    (j >= 0 && (j as usize) < entrada.len())
+                        .then(|| entrada[j as usize] as f64 * kernel[k])
+                })
+                .sum();
+            let rapida = lowpass_at(&entrada, &kernel, i);
+            assert!((directa - rapida).abs() < 1e-6, "i={}: {} vs {}", i, directa, rapida);
+        }
     }
 
     #[test]

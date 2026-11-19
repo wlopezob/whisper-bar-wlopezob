@@ -8,6 +8,39 @@ BINARY="target/release/whisper-bar-rust"
 APP_DIR="/Applications/${APP_NAME}.app"
 LOG_PATH="${HOME}/.config/${APP_NAME}/${APP_NAME}.log"
 
+# Añade un Stop hook a un JSON de settings (Claude Code o Codex) sin tocar los
+# demás hooks. Crea el archivo si no existe; si existe pero no es JSON válido,
+# avisa y no lo modifica (sobrescribirlo borraría la config del usuario).
+#   $1 = archivo  $2 = comando  $3 = campos extra del handler en JSON
+register_stop_hook() {
+    python3 - "$1" "$2" "$3" <<'PYEOF'
+import json, os, sys
+
+path, command, extra = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+
+data = {}
+if os.path.isfile(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"  ⚠️  {path} no es JSON válido ({e}); registra el hook a mano")
+        sys.exit(0)
+
+stops = data.setdefault("hooks", {}).setdefault("Stop", [])
+if any(h.get("command") == command for s in stops for h in s.get("hooks", [])):
+    print(f"  → Stop hook ya registrado en {path} (sin cambios)")
+    sys.exit(0)
+
+stops.append({"hooks": [{"type": "command", "command": command, **extra}]})
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+print(f"  → Stop hook registrado en {path}")
+PYEOF
+}
+
 echo "🔨 Compilando..."
 cargo build --release --bins
 
@@ -97,39 +130,8 @@ chmod +x "${HOME}/.claude/hooks/whisper-tts-stop.sh"
 echo "  → ${HOME}/.claude/hooks/whisper-tts-stop.sh"
 
 # Registrar el hook en ~/.claude/settings.json si no está ya
-SETTINGS="${HOME}/.claude/settings.json"
-HOOK_CMD="${HOME}/.claude/hooks/whisper-tts-stop.sh"
-if ! python3 -c "
-import json, sys
-with open('${SETTINGS}') as f:
-    data = json.load(f)
-stops = data.get('hooks', {}).get('Stop', [])
-cmds = [h.get('command','') for s in stops for h in s.get('hooks',[])]
-sys.exit(0 if '${HOOK_CMD}' in cmds else 1)
-" 2>/dev/null; then
-    python3 - "${SETTINGS}" "${HOOK_CMD}" <<'PYEOF'
-import json, sys
-
-settings_path, hook_cmd = sys.argv[1], sys.argv[2]
-with open(settings_path) as f:
-    data = json.load(f)
-
-data.setdefault('hooks', {}).setdefault('Stop', []).append({
-    'hooks': [{
-        'type': 'command',
-        'command': hook_cmd,
-        'async': True
-    }]
-})
-
-with open(settings_path, 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-PYEOF
-    echo "  → Stop hook registrado en ${SETTINGS}"
-else
-    echo "  → Stop hook ya registrado (sin cambios)"
-fi
+register_stop_hook "${HOME}/.claude/settings.json" \
+    "${HOME}/.claude/hooks/whisper-tts-stop.sh" '{"async": true}'
 
 # ── Instalar Stop hook de Codex CLI ──────────────────────────────────────────
 echo "🔗 Instalando Codex CLI Stop hook..."
@@ -138,23 +140,8 @@ cp hooks/whisper-tts-codex-stop.sh "${HOME}/.codex/hooks/whisper-tts-stop.sh"
 chmod +x "${HOME}/.codex/hooks/whisper-tts-stop.sh"
 echo "  → ${HOME}/.codex/hooks/whisper-tts-stop.sh"
 
-CODEX_HOOKS="${HOME}/.codex/hooks.json"
-CODEX_HOOK_CMD="${HOME}/.codex/hooks/whisper-tts-stop.sh"
-python3 - "${CODEX_HOOKS}" "${CODEX_HOOK_CMD}" <<'PYEOF'
-import json, sys, os
-hooks_file, hook_path = sys.argv[1], sys.argv[2]
-data = {}
-if os.path.isfile(hooks_file):
-    with open(hooks_file) as f:
-        try: data = json.load(f)
-        except json.JSONDecodeError: data = {}
-# Formato correcto: array de matcher+handler objects
-data.setdefault("hooks", {})["Stop"] = [{"hooks": [{"type": "command", "command": hook_path, "timeout": 30}]}]
-with open(hooks_file, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PYEOF
-echo "  → Stop hook registrado en ${CODEX_HOOKS}"
+register_stop_hook "${HOME}/.codex/hooks.json" \
+    "${HOME}/.codex/hooks/whisper-tts-stop.sh" '{"timeout": 30}'
 
 echo ""
 echo "✅ Instalado en: ${APP_DIR}"

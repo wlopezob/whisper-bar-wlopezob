@@ -52,11 +52,11 @@ impl TranslatorProvider for AzureTranslator {
             .map_err(|e| format!("Azure response read: {}", e))?;
 
         if !status.is_success() {
-            return Err(format!("Azure HTTP {}: {}", status.as_u16(), &body_text[..body_text.len().min(300)]));
+            return Err(format!("Azure HTTP {}: {}", status.as_u16(), crate::text::truncate(&body_text, 300)));
         }
 
         let json: serde_json::Value = serde_json::from_str(&body_text)
-            .map_err(|e| format!("Azure JSON parse: {} — {}", e, &body_text[..body_text.len().min(200)]))?;
+            .map_err(|e| format!("Azure JSON parse: {} — {}", e, crate::text::truncate(&body_text, 200)))?;
 
         let detected_lang = json[0]["detectedLanguage"]["language"]
             .as_str()
@@ -116,7 +116,7 @@ impl TranslatorProvider for OllamaTranslator {
             .map_err(|e| format!("Ollama response read: {}", e))?;
 
         if !status.is_success() {
-            return Err(format!("Ollama HTTP {}: {}", status.as_u16(), &body_text[..body_text.len().min(200)]));
+            return Err(format!("Ollama HTTP {}: {}", status.as_u16(), crate::text::truncate(&body_text, 200)));
         }
 
         let json: serde_json::Value = serde_json::from_str(&body_text)
@@ -137,7 +137,7 @@ impl TranslatorProvider for OllamaTranslator {
         } else { raw.clone() };
 
         let result_json: serde_json::Value = serde_json::from_str(&clean)
-            .map_err(|e| format!("Ollama JSON parse: {} — raw: {}", e, &raw[..raw.len().min(200)]))?;
+            .map_err(|e| format!("Ollama JSON parse: {} — raw: {}", e, crate::text::truncate(&raw, 200)))?;
 
         let detected_lang = result_json["detected_lang"].as_str().unwrap_or("").to_string();
         let translated_text = result_json["text"]

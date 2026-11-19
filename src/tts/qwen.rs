@@ -2,7 +2,7 @@
 // Proveedor TTS local usando Qwen3-TTS VoiceDesign vía mlx-audio (Apple Silicon).
 // Ejecuta el script Python embebido con el venv de ~/.config/<app>/tts-venv.
 
-use super::provider::{AudioData, TtsProvider};
+use super::provider::AudioData;
 
 const SYNTH_SCRIPT: &str = include_str!("../../scripts/qwen_tts_synth.py");
 const SYNTH_SCRIPT_TMP: &str = "/tmp/whisper-qwen-tts-synth.py";
@@ -11,12 +11,6 @@ const SYNTH_OUT_TMP: &str = "/tmp/whisper-qwen-tts-out.wav";
 pub struct QwenProvider {
     pub prompt: String,
     pub temperature: f32,
-}
-
-impl TtsProvider for QwenProvider {
-    fn name(&self) -> &'static str {
-        "qwen"
-    }
 }
 
 impl QwenProvider {

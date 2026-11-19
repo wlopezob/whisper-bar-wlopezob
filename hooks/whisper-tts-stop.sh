@@ -46,6 +46,9 @@ try:
     if not transcript or not os.path.isfile(transcript):
         sys.exit(0)
 
+    # Nombre de la sesión (/rename): Claude Code escribe y repite entradas
+    # custom-title en el transcript; la última es el nombre vigente.
+    session_name = ""
     entries = []
     with open(transcript, encoding="utf-8") as f:
         for line in f:
@@ -55,6 +58,9 @@ try:
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if entry.get("type") == "custom-title":
+                session_name = entry.get("customTitle") or ""
                 continue
             if not entry.get("isSidechain", False):
                 entries.append(entry)
@@ -82,7 +88,8 @@ try:
                 break  # par completo encontrado
 
     if last_assistant:
-        print(json.dumps({"user": last_user, "assistant": last_assistant}))
+        print(json.dumps({"user": last_user, "assistant": last_assistant,
+                          "session": session_name}))
 
 except Exception as e:
     sys.stderr.write(f"whisper-tts-stop error: {e}\n")

@@ -6,7 +6,7 @@
 use reqwest::blocking::Client;
 use std::time::Duration;
 
-const MODEL: &str = "gemini-3.1-flash-lite";
+const MODEL: &str = crate::defaults::GEMINI_FORMATTER_MODEL;
 
 pub struct GeminiFormatter {
     pub api_key: String,
@@ -23,10 +23,11 @@ impl GeminiFormatter {
         assistant_msg: &str,
         system_prompt: &str,
     ) -> Result<String, String> {
+        // La clave va en el header, no en la URL: los errores de reqwest
+        // (timeout, red) incluyen la URL completa y acaban en el log.
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/\
-             {}:generateContent?key={}",
-            MODEL, self.api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            MODEL
         );
 
         // Construir el contenido incluyendo la pregunta del usuario como contexto
@@ -37,7 +38,7 @@ impl GeminiFormatter {
             // Con contexto: pregunta + respuesta para que el LLM entienda el par
             format!(
                 "[Pregunta del usuario]: {}\n\n[Respuesta del asistente]: {}",
-                &user_msg[..user_msg.len().min(500)],
+                crate::text::truncate(user_msg, 500),
                 assistant_msg
             )
         };
@@ -61,6 +62,7 @@ impl GeminiFormatter {
         let resp = client
             .post(&url)
             .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &self.api_key)
             .body(body.to_string())
             .send()
             .map_err(|e| format!("Formatter network: {}", e))?;

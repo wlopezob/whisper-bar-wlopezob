@@ -1,6 +1,6 @@
 # whisperwlopezob
 
-App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` o Azure MAI Transcribe, traduce automáticamente si el idioma detectado difiere del destino, y pega el texto donde está el cursor. Lee en voz alta las respuestas de Claude Code / Codex usando Gemini TTS.
+App de barra de menú para macOS que graba tu voz, transcribe con `whisper-cli` o Azure MAI Transcribe, traduce automáticamente (Azure Translator u Ollama local) si el idioma detectado difiere del destino, y pega el texto donde está el cursor. Lee en voz alta las respuestas de Claude Code / Codex con Gemini TTS o Qwen3-TTS local.
 
 **Hotkeys:**
 - `⌘⌥W` — mantén para grabar, suelta para transcribir y pegar
@@ -86,18 +86,37 @@ que no destroce la jerga del proyecto.
 
 > Las instalaciones que venían de `mai-transcribe-1.5` se migran solas al arrancar.
 > Si editaste el Definition JSON a mano, se respeta y no se toca.
+>
+> Si Azure rechaza el estilo `clean` (`unsupported_transcript_mode`, visto en
+> eastus en 2026-09), la app reintenta sin `transcribeStyle` (verbatim) y lo omite
+> hasta reiniciar. Cuando Azure lo arregle, vuelve a usar `clean` sin tocar nada.
 
 ### 7. (Opcional) Traducción automática
 
-Reutiliza las mismas credenciales de Azure MAI. Cuando está activa:
-- Detecta automáticamente el idioma del texto transcrito
-- Solo traduce si el idioma detectado ≠ idioma destino (sin coste innecesario)
+Dos proveedores, configurables desde **Configuración → TRADUCCIÓN**:
 
-Configurable desde **Configuración → TRADUCCIÓN**.
+- **Microsoft Translator** (default): reutiliza la API Key y región de Azure MAI.
+  Detecta el idioma y solo traduce si difiere del destino.
+- **Ollama local** (`gemma4:e4b`): requiere [Ollama](https://ollama.com) corriendo en
+  `localhost:11434` con el modelo descargado (`ollama pull gemma4:e4b`). El prompt
+  es editable y usa los placeholders `{dest_lang}` e `{input_text}`.
 
-### 8. (Opcional) Lectura de respuestas con Gemini TTS
+Si la traducción falla, se pega el texto original.
 
-Requiere una API key de Google Gemini. Configurable desde **Configuración → LECTURA DE RESPUESTAS**.
+### 8. (Opcional) Lectura de respuestas (TTS)
+
+Configurable desde **Configuración → LECTURA DE RESPUESTAS → Proveedor**:
+
+- **Gemini TTS** (default): requiere una API key de Google Gemini.
+- **Qwen3-TTS (local)**: 100% offline en Apple Silicon vía `mlx-audio`. Requiere:
+  ```bash
+  python3.12 -m venv ~/.config/whisperwlopezob/tts-venv
+  ~/.config/whisperwlopezob/tts-venv/bin/pip install mlx-audio
+  # modelo mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit en:
+  #   ~/.config/whisperwlopezob/tts-models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit
+  ```
+
+Si el proveedor falla (o no hay clave Gemini), se usa `say` de macOS como fallback.
 
 Para que las respuestas de Claude Code / Codex se lean automáticamente al terminar cada respuesta:
 
@@ -180,15 +199,18 @@ Panel nativo macOS con scroll vertical. Secciones en orden de flujo:
 | Campo | Descripción |
 |-------|-------------|
 | Activar traducción | Habilita traducción automática post-transcripción |
+| Proveedor | `Microsoft Translator` (credenciales de Azure MAI) u `Ollama (gemma4:e4b)` |
 | Idioma destino | `Español` o `English` |
+| Prompt Ollama | Instrucciones para Ollama (solo visible con ese proveedor) |
 
-Usa las mismas credenciales de Azure MAI. Si el idioma detectado ya es el destino, se salta la llamada.
+Si el idioma detectado ya es el destino, el texto se pega sin traducir.
 
 ### LECTURA DE RESPUESTAS
 
 | Campo | Descripción |
 |-------|-------------|
-| Leer respuestas de Claude | Habilita síntesis de voz con Gemini TTS |
+| Leer respuestas de Claude | Habilita la síntesis de voz |
+| Proveedor | `Gemini TTS` o `Qwen3-TTS (local)` |
 | Clave Gemini | API key de Google Gemini (usada para TTS y formatter) |
 | Formatear respuesta para voz | Pre-procesa con `gemini-3.1-flash-lite` antes de sintetizar |
 | Prompt TTS | Instrucciones para el formatter (configurable) |
@@ -196,7 +218,10 @@ Usa las mismas credenciales de Azure MAI. Si el idioma detectado ya es el destin
 | Vel | Velocidad de reproducción afplay (default: `1.0`) |
 | Escena | Director's note: estilo de narración para Gemini TTS |
 | Contexto | Contexto de la conversación para Gemini TTS |
+| Prompt voz Qwen | Descripción de la voz para Qwen3-TTS VoiceDesign (acento primero) |
+| Temp | Temperatura de Qwen3-TTS (default `0.7`; más baja = timbre más estable) |
 | Mostrar texto al leer (`⌘⌥V`) | Muestra modal con el texto antes de reproducirlo |
+| Sesiones a escuchar | Nombres de sesión de Claude Code (los de `/rename`) separados por comas. Vacío = todas |
 
 ---
 
@@ -204,10 +229,10 @@ Usa las mismas credenciales de Azure MAI. Si el idioma detectado ya es el destin
 
 Al terminar cada respuesta, Claude Code / Codex ejecuta automáticamente `whisper-tts` que:
 
-1. Recibe el par `{user, assistant}` por stdin
-2. Comprueba si `tts_enabled` está activo en la DB
+1. Recibe `{user, assistant, session}` por stdin (`session` = nombre puesto con `/rename`)
+2. Comprueba si `tts_enabled` está activo en la DB y si la sesión está en **Sesiones a escuchar**
 3. (Opcional) Formatea con `gemini-3.1-flash-lite` si el texto tiene código, markdown o listas
-4. Sintetiza con Gemini TTS (`gemini-3.1-flash-tts-preview`)
+4. Sintetiza con el proveedor configurado: Gemini TTS (`gemini-3.8-flash-lite-tts`, Interactions API; escena y contexto van como `speech_metadata.style`) o Qwen3-TTS local; si falla, `say`
 5. Reproduce con `afplay` (respetando la velocidad configurada)
 6. Guarda el audio en `audio/last-tts.wav` y el texto en `audio/last-tts-text.txt`
 
@@ -223,6 +248,18 @@ Config en `~/.claude/settings.json`:
   }
 }
 ```
+
+### Escuchar solo algunas sesiones
+
+Si trabajas con varios agentes a la vez, ponle nombre a los que quieres escuchar con
+`/rename <nombre>` en Claude Code y escribe esos nombres en **Configuración → Sesiones a
+escuchar** (p. ej. `mods, review`). El resto de sesiones no se leen ni cortan el audio
+en curso. La coincidencia es exacta y no distingue mayúsculas; una sesión sin nombre no
+se lee mientras haya filtro.
+
+El hook lee el nombre de las entradas `custom-title` del transcript, así que renombrar
+una sesión a mitad de trabajo se aplica desde la siguiente respuesta. El filtro no
+afecta a Codex (su hook no envía sesión).
 
 ### Hook para Codex Desktop
 
@@ -243,24 +280,27 @@ tail -20 ~/.config/whisperwlopezob/whisperwlopezob.log
 
 ```
 src/
-├── main.rs              — Event loop (winit), tray icon, coordinador principal
+├── main.rs              — Event loop (winit), tray icon, hotkeys, flujo grabar → transcribir → pegar
 ├── lib.rs               — Declaración de módulos
+├── settings.rs          — Struct Settings: carga/guarda toda la config de data.db (fuente única de claves)
+├── settings_window.rs   — Ventana nativa macOS (NSPanel modal, scrollable)
+├── db.rs                — Persistencia SQLite (tabla settings clave-valor)
 ├── config.rs            — Auto-detección de whisper-cli y modelos
 ├── defaults.rs          — Constantes y valores por defecto
 ├── hotkey.rs            — Hotkeys globales: ⌘⌥W, ⌘⌥R, ⌘⌥V
-├── recorder.rs          — Grabación de audio (cpal + hound, 16kHz mono PCM)
+├── recorder.rs          — Grabación (cpal + hound), resample a 16kHz mono con filtro anti-aliasing
 ├── transcriber.rs       — Invocación de whisper-cli con timeout 60s
-├── azure_transcriber.rs — Backend Azure MAI Transcribe (MAI-Transcribe-2)
-├── translator.rs        — Traducción Azure Translator v3 con auto-detección
+├── azure_transcriber.rs — Backend Azure MAI Transcribe (MAI-Transcribe-2, fallback sin transcribeStyle)
+├── translator.rs        — Traducción: Azure Translator v3 u Ollama local (factory)
 ├── formatter.rs         — Formateador Gemini Flash Lite para TTS
-├── tts/
-│   ├── mod.rs           — Orquestador TTS, PID management, replay path
-│   ├── gemini.rs        — Síntesis con gemini-3.1-flash-tts-preview (PCM→WAV)
-│   ├── say.rs           — Fallback: say -v Paulina
-│   └── provider.rs      — Trait TtsProvider + structs AudioData, TtsConfig
-├── db.rs                — Persistencia SQLite (tabla settings clave-valor)
+├── text.rs              — Utilidades de texto (recorte seguro UTF-8)
 ├── logger.rs            — Log dual: consola + archivo
-└── settings_window.rs   — Ventana nativa macOS (NSPanel modal, scrollable)
+└── tts/
+    ├── mod.rs           — Orquestador TTS: elige proveedor, reproduce con afplay, gestión de PIDs
+    ├── gemini.rs        — Síntesis con gemini-3.8-flash-lite-tts (WAV)
+    ├── qwen.rs          — Síntesis local Qwen3-TTS (ejecuta scripts/qwen_tts_synth.py en el venv)
+    ├── say.rs           — Fallback: say -v Paulina / Samantha
+    └── provider.rs      — Structs AudioData, TtsConfig
 
 src/bin/
 └── whisper-tts.rs       — Binario CLI para el Stop hook
@@ -273,7 +313,7 @@ src/bin/
 ⌘⌥W (release) → Recorder::stop() → WAV en /tmp/
   └─▶ transcriber::transcribe()       (whisper-cli local)
    OR azure_transcriber::transcribe() (Azure MAI Transcribe)
-  └─▶ [translator::translate()]       si activo y detected_lang ≠ dest_lang
+  └─▶ [translator::translate()]       si activo y detected_lang ≠ dest_lang (Azure u Ollama)
   └─▶ paste_text()                    simula ⌘V
 ```
 
@@ -283,7 +323,7 @@ src/bin/
 Claude Code / Codex termina respuesta
   └─▶ Stop hook → whisper-tts (stdin: {user, assistant})
   └─▶ [GeminiFormatter]               si formatter activo y texto lo requiere
-  └─▶ GeminiProvider::synthesize()
+  └─▶ GeminiProvider | QwenProvider   (fallback: say)
   └─▶ afplay audio.wav                (velocidad configurable)
   └─▶ guarda last-tts.wav + last-tts-text.txt
   └─▶ [modal osascript]               si show_modal activo
@@ -293,16 +333,23 @@ Claude Code / Codex termina respuesta
 
 ## Configuración persistente (data.db)
 
+Todas las claves se definen en un único sitio: `src/settings.rs` (`Settings::load` / `save`).
+
 | Clave | Valores | Default |
 |-------|---------|---------|
 | `translate_enabled` | `"true"` \| `"false"` | `"false"` |
 | `translate_dest_lang` | `"es"` \| `"en"` | `"es"` |
+| `translate_provider` | `"azure"` \| `"ollama"` | `"azure"` |
+| `translate_ollama_prompt` | string | (prompt JSON con `{dest_lang}` / `{input_text}`) |
 | `azure_mai_enabled` | `"true"` \| `"false"` | `"false"` |
 | `azure_mai_key` | string | `""` |
 | `azure_mai_region` | string | `""` |
 | `azure_mai_api_version` | string | `"2025-10-15"` |
 | `azure_mai_definition` | JSON string | `{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2",…}}` (ver `defaults.rs`) |
 | `tts_enabled` | `"true"` \| `"false"` | `"false"` |
+| `tts_provider` | `"gemini"` \| `"qwen"` | `"gemini"` |
+| `tts_qwen_prompt` | string | (descripción de voz, acento primero) |
+| `tts_qwen_temperature` | float string | `"0.7"` |
 | `gemini_api_key` | string | `""` |
 | `tts_voice` | nombre de voz Gemini | `"Sulafat"` |
 | `tts_playback_rate` | float string | `"1.0"` |
@@ -311,6 +358,7 @@ Claude Code / Codex termina respuesta
 | `tts_formatter_enabled` | `"true"` \| `"false"` | `"false"` |
 | `tts_formatter_prompt` | string | (7 reglas de formato) |
 | `tts_show_modal` | `"true"` \| `"false"` | `"false"` |
+| `tts_sessions` | nombres separados por comas | `""` (todas) |
 
 ---
 
@@ -331,8 +379,9 @@ Claude Code / Codex termina respuesta
 - Prueba el binario manualmente con el comando de la sección anterior
 
 **La traducción no funciona**
-- Requiere Azure MAI configurado (reutiliza la misma API Key y región)
 - Verifica que `translate_enabled = true` y el idioma destino esté configurado
+- Microsoft Translator: requiere API Key y región de Azure MAI
+- Ollama: verifica que esté corriendo (`curl localhost:11434`) y que el modelo esté descargado (`ollama pull gemma4:e4b`)
 
 **El texto no se pega**
 - Habilita Accessibility (necesario para simular `⌘V`)

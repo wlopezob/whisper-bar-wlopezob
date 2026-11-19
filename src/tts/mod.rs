@@ -6,11 +6,12 @@ mod provider;
 mod qwen;
 mod say;
 
-pub use provider::{AudioData, TtsConfig, TtsProvider};
+pub use provider::{AudioData, TtsConfig};
 
 use gemini::GeminiProvider;
 use qwen::QwenProvider;
 use say::SayProvider;
+use std::path::Path;
 use std::time::Duration;
 
 const PID_FILE: &str = "/tmp/whisper-tts.pid";
@@ -56,6 +57,11 @@ pub fn kill_previous_instance() {
             }
         }
     }
+    // Matar al proceso padre no mata a su afplay/say hijo: sigue sonando y se
+    // solapa con la respuesta nueva. Se paran aparte, DESPUÉS del padre, para
+    // que el padre no despierte de child.wait() y borre archivos compartidos.
+    kill_afplay();
+    kill_say();
 }
 
 pub fn write_pid_file() {
@@ -128,11 +134,7 @@ pub fn speak(text: &str, config: &TtsConfig) {
     );
 
     let clean = clean_markdown(text);
-    let clean = if clean.len() > 5000 {
-        &clean[..5000]
-    } else {
-        clean.as_str()
-    };
+    let clean = crate::text::truncate(&clean, 5000);
 
     // ── Qwen3-TTS local (mlx-audio) ───────────────────────────────────────────
     if config.provider == "qwen" {
@@ -201,20 +203,32 @@ fn play_audio_file(audio: AudioData, rate: f32) {
         }
     }
 
+    if play_wav(Path::new(&tmp), rate) {
+        log::info!("TTS: audio reproducido correctamente");
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// Reproduce un archivo con afplay y bloquea hasta que termine o hasta que
+/// `kill_afplay()` lo pare (el PID queda en AFPLAY_PID_FILE para eso).
+/// Devuelve false si afplay no se pudo lanzar.
+pub fn play_wav(path: &Path, rate: f32) -> bool {
     // spawn() en vez de status() para obtener el PID y permitir kill externo
     let mut cmd = std::process::Command::new("afplay");
     if (rate - 1.0).abs() > 0.01 {
         cmd.args(["-r", &format!("{:.2}", rate), "-q", "1"]);
     }
-    cmd.arg(&tmp);
+    cmd.arg(path);
     match cmd.spawn() {
         Ok(mut child) => {
             let _ = std::fs::write(AFPLAY_PID_FILE, child.id().to_string());
             let _ = child.wait();
             let _ = std::fs::remove_file(AFPLAY_PID_FILE);
-            log::info!("TTS: audio reproducido correctamente");
+            true
         }
-        Err(e) => log::error!("TTS: error en afplay: {}", e),
+        Err(e) => {
+            log::error!("TTS: error en afplay: {}", e);
+            false
+        }
     }
-    let _ = std::fs::remove_file(&tmp);
 }

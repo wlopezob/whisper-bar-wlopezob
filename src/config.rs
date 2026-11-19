@@ -8,23 +8,17 @@ pub struct Config {
     pub whisper_cli_path: String,
     pub model_path: String,
     pub min_recording_duration: f64,
-    pub llama_cli_path: String,
-    pub llm_models: Vec<String>, // rutas completas de .gguf encontrados en LLM_MODELS_SUBDIR
 }
 
 impl Config {
     pub fn new() -> Self {
         let whisper_cli_path = Self::detect_whisper_cli().unwrap_or_default();
         let model_path = Self::detect_model().unwrap_or_default();
-        let llama_cli_path = Self::detect_llama_cli().unwrap_or_default();
-        let llm_models = Self::scan_llm_models();
 
         Config {
             whisper_cli_path,
             model_path,
             min_recording_duration: defaults::MIN_RECORDING_DURATION,
-            llama_cli_path,
-            llm_models,
         }
     }
 
@@ -47,60 +41,6 @@ impl Config {
         }
 
         None
-    }
-
-    /// Busca CLI LLM en rutas conocidas (prioriza llama-completion)
-    fn detect_llama_cli() -> Option<String> {
-        for path in defaults::LLAMA_CLI_CANDIDATES {
-            if is_executable(path) {
-                return Some(path.to_string());
-            }
-        }
-
-        // Fallback: `which llama-completion` y luego `which llama-cli`
-        for bin in ["llama-completion", "llama-cli"] {
-            if let Ok(output) = Command::new("which").arg(bin).output() {
-                if output.status.success() {
-                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !path.is_empty() && is_executable(&path) {
-                        return Some(path);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Escanea ~/.config/whisperwlopezob/llm/ y devuelve rutas completas de todos los .gguf
-    fn scan_llm_models() -> Vec<String> {
-        let home = match std::env::var("HOME") {
-            Ok(h) => h,
-            Err(_) => return vec![],
-        };
-        let dir = format!("{}/{}/{}", home, defaults::APP_CONFIG_DIR, defaults::LLM_MODELS_DIR);
-        let path = Path::new(&dir);
-
-        if !path.exists() {
-            return vec![];
-        }
-
-        let mut models: Vec<String> = std::fs::read_dir(path)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|entry| {
-                let p = entry.path();
-                if p.extension().and_then(|e| e.to_str()) == Some("gguf") {
-                    p.to_str().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        models.sort();
-        models
     }
 
     /// Busca el mejor modelo Whisper disponible según prioridad definida en defaults
@@ -128,22 +68,6 @@ impl Config {
 
     pub fn is_model_valid(&self) -> bool {
         !self.model_path.is_empty() && Path::new(&self.model_path).exists()
-    }
-
-    pub fn is_llama_cli_valid(&self) -> bool {
-        is_executable(&self.llama_cli_path)
-    }
-
-    /// CLI LLM disponible Y al menos un modelo .gguf en LLM_MODELS_SUBDIR
-    pub fn is_llm_available(&self) -> bool {
-        self.is_llama_cli_valid() && !self.llm_models.is_empty()
-    }
-
-    /// Devuelve la ruta completa de un modelo LLM buscándolo por nombre de archivo
-    pub fn llm_model_path(&self, filename: &str) -> Option<String> {
-        self.llm_models.iter().find(|p| {
-            Path::new(p).file_name().and_then(|n| n.to_str()) == Some(filename)
-        }).cloned()
     }
 
     /// Extrae solo el nombre del archivo del modelo (para mostrar en menú)

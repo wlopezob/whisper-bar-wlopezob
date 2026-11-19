@@ -25,17 +25,24 @@ impl Db {
             std::fs::create_dir_all(parent).ok();
         }
 
-        let conn = Connection::open(&path)?;
+        let db = Self::init(Connection::open(&path)?)?;
+        log::info!("DB: {:?}", path);
+        Ok(db)
+    }
 
+    /// DB efímera para tests: no toca ~/.config.
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Arc<Self>> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Arc<Self>> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );",
         )?;
-
-        log::info!("DB: {:?}", path);
-
         Ok(Arc::new(Db {
             conn: Mutex::new(conn),
         }))

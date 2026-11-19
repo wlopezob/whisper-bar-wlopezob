@@ -23,9 +23,6 @@ pub const MODEL_PRIORITY: &[&str] = &[
     "ggml-tiny.bin",
 ];
 
-/// Carpeta de modelos LLM (.gguf) dentro de APP_CONFIG_DIR
-pub const LLM_MODELS_DIR: &str = "llm";
-
 /// Rutas candidatas de whisper-cli (en orden de preferencia)
 pub const WHISPER_CLI_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/whisper-cli", // Apple Silicon
@@ -79,16 +76,6 @@ pub const AZURE_MAI_DEFINITION: &str = concat!(
 pub const AZURE_MAI_LEGACY_DEFINITIONS: &[&str] = &[
     r#"{"enhancedMode":{"enabled":true,"model":"mai-transcribe-1.5"}}"#,
 ];
-
-/// Prompt de corrección gramatical por defecto para inglés.
-/// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
-pub const GRAMMAR_PROMPT_EN: &str =
-    "Fix grammar and pronunciation errors in this English text. Return ONLY the corrected text, no explanations, no extra words. /no_think";
-
-/// Prompt de corrección gramatical por defecto para español.
-/// Incluye /no_think para evitar cadenas de razonamiento en modelos thinking.
-pub const GRAMMAR_PROMPT_ES: &str =
-    "Corrige los errores gramaticales de este texto en español. Devuelve ÚNICAMENTE el texto corregido. /no_think";
 
 
 /// Subcarpeta de audio dentro de APP_CONFIG_DIR — guarda last-tts.wav
@@ -173,14 +160,6 @@ pub const FORMATTER_DEFAULT_PROMPT: &str =
      5. Keep critical warnings, errors, and important next steps.\n\
      6. Direct conversational tone. No phrases like \"Here is:\" or \"In summary:\".\n\
      7. Output ONLY the ready-to-speak text. Nothing else.";
-
-/// Rutas candidatas de CLI LLM (prioriza llama-completion; fallback llama-cli)
-pub const LLAMA_CLI_CANDIDATES: &[&str] = &[
-    "/opt/homebrew/bin/llama-completion", // Apple Silicon (preferido)
-    "/usr/local/bin/llama-completion",    // Intel (preferido)
-    "/opt/homebrew/bin/llama-cli",        // fallback legacy
-    "/usr/local/bin/llama-cli",           // fallback legacy
-];
 
 #[cfg(test)]
 mod tests {
